@@ -9,8 +9,8 @@ import numpy as np
 PCFG_G1 = '''
 0.35 S -> N Vi
 0.30 S -> N Vi PP      # 0.60 * 0.5
-0.18 S -> N BE VPpp    # 0.60 * 0.3
-0.12 S -> N BE VPpp PP # 0.60 * 0.2
+0.18 S -> N BE Vpp     # 0.60 * 0.3
+0.12 S -> N BE VPpp    # 0.60 * 0.2
 0.05 S -> NP Vi
 
 1.0 NP -> N RC
@@ -20,7 +20,7 @@ PCFG_G1 = '''
 '''
 
 ROOT = 'S'
-MAXLEN = 6  # FIXED: Changed from 5 to 6 to accommodate S4 (N BE Vpp P N P N) which has 6 terminals
+MAXLEN = 5  # Max sentence length: S4 (N BE Vpp P N) and S5 (N Vpp P N Vi) both have 5 terminals
 
 # ============================================================================
 # Initialize network with paper's specifications
