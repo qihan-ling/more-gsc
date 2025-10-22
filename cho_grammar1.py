@@ -40,10 +40,8 @@ net_opts = {
     'T_init': 0.01,      # computational temperature
     'q_max': 15.0,       # maximum commitment
     'q_init': 0.0,       # initial commitment (FIXED: was 'q_0')
-    'dt': 0.005,         # time step
-    'm': 30,             # resource constraint
-    'lam_x': 0.5,        # input decay
-    'lam_q': 0.04,       # decay parameter
+    'dt_init': 0.005,    # time step (FIXED: was 'dt')
+    'm': 30,             # resource constraint (Hq1 strength)
     'use_runC': True,    # use C implementation for speed
 }
 
