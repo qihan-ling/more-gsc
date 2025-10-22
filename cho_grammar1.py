@@ -20,7 +20,7 @@ PCFG_G1 = '''
 '''
 
 ROOT = 'S'
-MAXLEN = 5
+MAXLEN = 6  # FIXED: Changed from 5 to 6 to accommodate S4 (N BE Vpp P N P N) which has 6 terminals
 
 # ============================================================================
 # Initialize network with paper's specifications
@@ -53,10 +53,13 @@ net.generate_corpus(use_freq=True)
 # Display target probabilities
 print("\n" + "="*70)
 print("Target sentence probabilities:")
+print(f"Total sentences in corpus: {len(net.corpus['sentence'])}")
 for si, sent in enumerate(net.corpus['sentence']):
-    sent_str = ' '.join([bname.split('/')[0] for bname in sent])
+    # Show only terminal-level bindings (level 1)
+    terminals_only = [bname for bname in sent if '(1,' in bname]
+    sent_str = ' '.join([bname.split('/')[0] for bname in terminals_only])
     prob = net.corpus['prob_sent'][si]
-    print(f"Sentence {si}: p = {prob:.4f} ({sent_str})")
+    print(f"Sentence {si}: p = {prob:.4f} ({sent_str}) [{len(terminals_only)} words]")
 
 # ============================================================================
 # Training setup (matching Section 4 parameters)
