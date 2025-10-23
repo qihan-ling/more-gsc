@@ -179,56 +179,98 @@ plt.savefig('figure12_g1_parsing.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 print("\n" + "="*70)
-print("Generating treelet activation trajectories...")
+print("Generating treelet activation trajectories for each sentence type...")
 print("="*70)
 
 # ============================================================================
 # Plot treelet activation trajectories at roles (2,1) and (3,2)
+# for each sentence type
 # ============================================================================
 
-# Create figure with 2 subplots (top: role (2,1), bottom: role (3,2))
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+# Helper function to extract word sequence from binding names
+def get_word_sequence(sent):
+    """Extract word types from binding names (e.g., 'N/(1,1)' -> 'N')"""
+    return ' '.join([bname.split('/')[0] for bname in sent])
 
-# Top panel: Role (2,1)
-plt.sca(ax1)
-gsc.plot_treelet_act_trace(
-    net,
-    rname='(2,1)',          # Role at level 2, position 1
-    num_treelets=4,         # Show 4 most active treelets
-    tmin=0,                 # Start time
-    tmax=1000,              # End time (adjust based on training length)
-    downsampling=30,        # Downsample for cleaner plot
-    suppress_pos=True,      # Omit position-specific role '0' and '1'
-    add_prob=False,         # Don't add probabilities to labels
-    legend_pos='upper right'
-)
-ax1.set_title('Treelet Activations at Role (2,1)', fontsize=12)
-ax1.grid(True, alpha=0.3)
+# Helper function to run network on a specific sentence and generate plots
+def plot_sentence_treelets(net, sent, sent_idx, target):
+    """Run network on specific sentence and plot treelet activations"""
 
-# Bottom panel: Role (3,2)
-plt.sca(ax2)
-gsc.plot_treelet_act_trace(
-    net,
-    rname='(3,2)',          # Role at level 3, position 2
-    num_treelets=4,         # Show 4 most active treelets
-    tmin=0,                 # Start time
-    tmax=1000,              # End time
-    downsampling=30,        # Downsample for cleaner plot
-    suppress_pos=True,      # Omit position-specific role '0' and '1'
-    add_prob=False,         # Don't add probabilities to labels
-    legend_pos='upper right'
-)
-ax2.set_title('Treelet Activations at Role (3,2)', fontsize=12)
-ax2.grid(True, alpha=0.3)
+    # Get word sequence for display
+    word_seq = get_word_sequence(sent)
 
-plt.tight_layout()
-plt.savefig('treelet_activations_g1.png', dpi=300, bbox_inches='tight')
-plt.show()
+    # Extract word types only (without binding info)
+    words = [bname.split('/')[0] for bname in sent]
+
+    print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
+
+    # Reset network and run on this specific sentence with trace logging
+    net.reset(mu=net.ep, sd=0.01)
+    net.initialize_traces(trace_list='all')
+
+    # Run word by word
+    for wi, word in enumerate(words):
+        net.run_word(word, wi + 1, log_trace=True)
+
+    # Run wrapup
+    net.run_wrapup(log_trace=True)
+
+    # Create figure with 2 subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+    # Top panel: Role (2,1)
+    plt.sca(ax1)
+    gsc.plot_treelet_act_trace(
+        net,
+        rname='(2,1)',
+        num_treelets=4,
+        tmin=0,
+        tmax=net.t,  # Use actual time reached
+        downsampling=max(1, int(len(net.traces['t']) / 200)),  # Adaptive downsampling
+        suppress_pos=True,
+        add_prob=False,
+        legend_pos='upper right'
+    )
+    ax1.set_title(f'S{sent_idx}: {word_seq} - Treelet Activations at Role (2,1)', fontsize=11)
+    ax1.grid(True, alpha=0.3)
+
+    # Bottom panel: Role (3,2)
+    plt.sca(ax2)
+    gsc.plot_treelet_act_trace(
+        net,
+        rname='(3,2)',
+        num_treelets=4,
+        tmin=0,
+        tmax=net.t,
+        downsampling=max(1, int(len(net.traces['t']) / 200)),
+        suppress_pos=True,
+        add_prob=False,
+        legend_pos='upper right'
+    )
+    ax2.set_title(f'S{sent_idx}: {word_seq} - Treelet Activations at Role (3,2)', fontsize=11)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    filename = f'treelet_activations_S{sent_idx}_{word_seq.replace(" ", "_")}.png'
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    return filename
+
+# Generate plots for each sentence in the corpus
+filenames = []
+for si, (sent, targ) in enumerate(zip(net.corpus['sentence'], net.corpus['target'])):
+    filename = plot_sentence_treelets(net, sent, si, targ)
+    filenames.append(filename)
 
 print("\n" + "="*70)
 print("Replication complete!")
 print("Figures saved as:")
 print("  - Plots from plot_train_result() (displayed interactively)")
 print("  - figure12_g1_parsing.png")
-print("  - treelet_activations_g1.png")
+print("\nTreelet activation trajectories for each sentence:")
+for si, filename in enumerate(filenames):
+    word_seq = get_word_sequence(net.corpus['sentence'][si])
+    marker = " <-- S1 = 'N Vi P N'" if word_seq == 'N Vi P N' else ""
+    print(f"  - {filename}{marker}")
 print("="*70)
