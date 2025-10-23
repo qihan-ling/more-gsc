@@ -179,8 +179,56 @@ plt.savefig('figure12_g1_parsing.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 print("\n" + "="*70)
+print("Generating treelet activation trajectories...")
+print("="*70)
+
+# ============================================================================
+# Plot treelet activation trajectories at roles (2,1) and (3,2)
+# ============================================================================
+
+# Create figure with 2 subplots (top: role (2,1), bottom: role (3,2))
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+# Top panel: Role (2,1)
+plt.sca(ax1)
+gsc.plot_treelet_act_trace(
+    net,
+    rname='(2,1)',          # Role at level 2, position 1
+    num_treelets=4,         # Show 4 most active treelets
+    tmin=0,                 # Start time
+    tmax=1000,              # End time (adjust based on training length)
+    downsampling=30,        # Downsample for cleaner plot
+    suppress_pos=True,      # Omit position-specific role '0' and '1'
+    add_prob=False,         # Don't add probabilities to labels
+    legend_pos='upper right'
+)
+ax1.set_title('Treelet Activations at Role (2,1)', fontsize=12)
+ax1.grid(True, alpha=0.3)
+
+# Bottom panel: Role (3,2)
+plt.sca(ax2)
+gsc.plot_treelet_act_trace(
+    net,
+    rname='(3,2)',          # Role at level 3, position 2
+    num_treelets=4,         # Show 4 most active treelets
+    tmin=0,                 # Start time
+    tmax=1000,              # End time
+    downsampling=30,        # Downsample for cleaner plot
+    suppress_pos=True,      # Omit position-specific role '0' and '1'
+    add_prob=False,         # Don't add probabilities to labels
+    legend_pos='upper right'
+)
+ax2.set_title('Treelet Activations at Role (3,2)', fontsize=12)
+ax2.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('treelet_activations_g1.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+print("\n" + "="*70)
 print("Replication complete!")
 print("Figures saved as:")
 print("  - Plots from plot_train_result() (displayed interactively)")
 print("  - figure12_g1_parsing.png")
+print("  - treelet_activations_g1.png")
 print("="*70)
