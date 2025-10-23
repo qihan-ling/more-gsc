@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Berkeley parser
+*.jar
+*.gr
+berkeley/
+berkeley_data/
+
+# PTB data (large, do not commit)
+treebank_3/
+ptb/
+*.mrg
+*.trees
+
+# Extracted grammars and mappings
+*_grammar.txt
+*_rules.txt
+pos_to_words.json
+pos_embeddings.pkl
+
+# Model files
+*.pkl
+
+# Generated plots
+*.png
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
