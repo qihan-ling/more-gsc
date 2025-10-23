@@ -132,9 +132,18 @@ print("\n" + "="*70)
 print("Testing parsing accuracy (Figure 12)...")
 print("="*70)
 
+# Helper function to extract word sequence from binding names
+def get_word_sequence(sent):
+    """Extract word types from binding names (e.g., 'N/(1,1)' -> 'N')"""
+    return ' '.join([bname.split('/')[0] for bname in sent])
+
 # Test parsing at different commitment levels (t ∈ {1, 2, ..., 12})
 commitment_levels = list(range(1, 13))
-parsing_accuracy = []
+num_sentences = len(net.corpus['sentence'])
+
+# Track accuracy for each sentence separately
+# parsing_accuracy_per_sent[si] will contain accuracies across all commitment levels for sentence si
+parsing_accuracy_per_sent = {si: [] for si in range(num_sentences)}
 
 for t in commitment_levels:
     # Create commitment policy: use fixed commitment per word
@@ -143,7 +152,6 @@ for t in commitment_levels:
     dq = np.ones(max_sent_len) * (float(t) / max_sent_len)
 
     # Test parsing using gsc.test_parse_inc
-    # FIXED: Implemented actual parsing test instead of placeholder
     try:
         parse_results = gsc.test_parse_inc(
             net,
@@ -154,24 +162,51 @@ for t in commitment_levels:
             disp=False
         )
 
-        # Calculate overall accuracy
+        # Track accuracy for each sentence separately
+        for si in range(num_sentences):
+            if si in parse_results:
+                acc_si = parse_results[si]['acc']
+            else:
+                acc_si = 0.0
+            parsing_accuracy_per_sent[si].append(acc_si)
+
+        # Calculate overall accuracy for display
         n_correct = sum([parse_results[si]['acc'] for si in parse_results])
         n_total = len(parse_results)
-        acc = n_correct / n_total if n_total > 0 else 0.0
+        acc_overall = n_correct / n_total if n_total > 0 else 0.0
 
     except Exception as e:
         print(f"  Warning: Parsing test failed at t={t}: {e}")
-        acc = 0.0
+        # Append 0.0 for all sentences if parsing failed
+        for si in range(num_sentences):
+            parsing_accuracy_per_sent[si].append(0.0)
+        acc_overall = 0.0
 
-    parsing_accuracy.append(acc)
-    print(f"Commitment t={t:2d}: Parsing accuracy = {acc:.3f}")
+    print(f"Commitment t={t:2d}: Overall accuracy = {acc_overall:.3f}")
+    # Also print per-sentence accuracies
+    for si in range(num_sentences):
+        word_seq = get_word_sequence(net.corpus['sentence'][si])
+        print(f"  S{si} ({word_seq}): {parsing_accuracy_per_sent[si][-1]:.3f}")
 
-# Plot Figure 12
-plt.figure(figsize=(8, 6))
-plt.plot(commitment_levels, parsing_accuracy, 'o-', linewidth=2, markersize=8)
+# Plot Figure 12 - One line per sentence type
+plt.figure(figsize=(10, 6))
+
+# Define colors and markers for each sentence
+colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']  # 5 distinct colors
+markers = ['o', 's', '^', 'D', 'v']  # Different markers for each sentence
+
+# Plot each sentence type
+for si in range(num_sentences):
+    word_seq = get_word_sequence(net.corpus['sentence'][si])
+    plt.plot(commitment_levels, parsing_accuracy_per_sent[si],
+             color=colors[si], marker=markers[si],
+             linewidth=2, markersize=6,
+             label=f'S{si}: {word_seq}')
+
 plt.xlabel('Commitment Level (t)', fontsize=12)
 plt.ylabel('Parsing Accuracy', fontsize=12)
-plt.title('Grammar 1 (G1) Parsing Accuracy', fontsize=14)
+plt.title('Grammar 1 (G1) Parsing Accuracy by Sentence Type', fontsize=14)
+plt.legend(loc='best', fontsize=10, framealpha=0.9)
 plt.grid(True, alpha=0.3)
 plt.ylim([0, 1.05])
 plt.tight_layout()
@@ -186,11 +221,6 @@ print("="*70)
 # Plot treelet activation trajectories at roles (2,1) and (3,2)
 # for each sentence type
 # ============================================================================
-
-# Helper function to extract word sequence from binding names
-def get_word_sequence(sent):
-    """Extract word types from binding names (e.g., 'N/(1,1)' -> 'N')"""
-    return ' '.join([bname.split('/')[0] for bname in sent])
 
 # Helper function to run network on a specific sentence and generate plots
 def plot_sentence_treelets(net, sent, sent_idx, target):
