@@ -26,6 +26,9 @@ ptb/
 pos_to_words.json
 pos_embeddings.pkl
 
+# Test outputs
+test_*.txt
+
 # Model files
 *.pkl
 
