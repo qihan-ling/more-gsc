@@ -191,11 +191,11 @@ class PCFG():
 
             sym_prob = {}
             for rule in self.rules:
-                if rule['d2'] is None:
+                if rule.get('d2') is None:
                     sym_prob[rule['d1']] = rule['p']
 
             for rule in self.rules:
-                if rule['d2'] is not None:
+                if rule.get('d2') is not None:
 
                     if rule['d1'] in mothers:
                         # d1 is a non-terminal symbol. Find tokens of d1
@@ -253,7 +253,7 @@ class PCFG():
                     else:
                         if rule['d1'] == mother:
                             tokens.append(rule['d1'] + sep + role_names[0])
-                        if rule['d2'] == mother:
+                        if rule.get('d2') == mother:
                             tokens.append(rule['d2'] + sep + role_names[1])
 
                 if self.get_types(mother)[0] in self.root:
@@ -278,11 +278,11 @@ class PCFG():
                             rules_new.append(rule_new)
 
                     else:
-                        if rule['d1'] is not None:
+                        if rule.get('d1') is not None:
                             d1 = rule['d1'] + sep + role_names[0]
                         else:
                             d1 = None
-                        if rule['d2'] is not None:
+                        if rule.get('d2') is not None:
                             d2 = rule['d2'] + sep + role_names[1]
                         else:
                             d2 = None
@@ -721,7 +721,7 @@ class PCFG():
     def is_unary_rule(self, rule):
         '''Returns (bool) on whether rule (dict) is a unary rule or not.'''
 
-        return (rule['d1'] is None) or (rule['d2'] is None)
+        return (rule.get('d1') is None) or (rule.get('d2') is None)
 
     def is_hnf_unary_rule(self, rule):
         '''Returns (bool) on whether rule (dict) is a non-copy, unary branching
