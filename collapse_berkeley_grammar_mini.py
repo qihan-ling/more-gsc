@@ -65,7 +65,7 @@ def parse_grammar_line(line):
 def collapse_grammar_mini(grammar_file, output_file=None,
                          min_probability=1e-10,
                          cumulative_threshold=0.95,
-                         remove_identity_unary=True):
+                         remove_unary_rules=True):
     """
     Collapse Berkeley Parser grammar and create minimal version.
 
@@ -74,7 +74,7 @@ def collapse_grammar_mini(grammar_file, output_file=None,
         output_file: Path to output GSC grammar (if None, returns string)
         min_probability: Minimum probability threshold (applied before cumulative)
         cumulative_threshold: Keep top rules until this cumulative probability (e.g., 0.95)
-        remove_identity_unary: Remove rules like "IN -> IN" with prob 1.0
+        remove_unary_rules: Remove all unary rules (GSC requires CNF-like format)
 
     Returns:
         Grammar string in GSC format
@@ -139,22 +139,24 @@ def collapse_grammar_mini(grammar_file, output_file=None,
     print(f"  Normalized {len(lhs_groups):,} LHS categories")
     print(f"  Total normalized rules: {len(normalized_rules):,}")
 
-    # Step 3: Remove identity unary rules
-    if remove_identity_unary:
-        print(f"\nStep 3: Remove identity unary rules (e.g., 'IN -> IN' with prob 1.0)")
+    # Step 3: Remove unary rules (GSC requires CNF-like format)
+    if remove_unary_rules:
+        print(f"\nStep 3: Remove unary rules (GSC requires binary/terminal rules only)")
 
         filtered_rules = {}
-        identity_removed = 0
+        unary_removed = 0
 
         for rule, prob in normalized_rules.items():
             lhs, rhs = rule.split(' -> ', 1)
-            # Check if it's a unary rule with identical LHS and RHS and prob ≈ 1.0
-            if rhs == lhs and abs(prob - 1.0) < 1e-6:
-                identity_removed += 1
+            rhs_parts = rhs.split()
+
+            # Check if it's a unary rule (exactly one symbol on RHS)
+            if len(rhs_parts) == 1:
+                unary_removed += 1
             else:
                 filtered_rules[rule] = prob
 
-        print(f"  Identity unary rules removed: {identity_removed:,}")
+        print(f"  Unary rules removed: {unary_removed:,}")
         print(f"  Remaining rules: {len(filtered_rules):,}")
         normalized_rules = filtered_rules
 
@@ -286,9 +288,9 @@ def main():
         help='Cumulative probability threshold (default: 0.95 = 95%%)'
     )
     parser.add_argument(
-        '--keep-identity',
+        '--keep-unary',
         action='store_true',
-        help='Keep identity unary rules (e.g., "IN -> IN")'
+        help='Keep unary rules (not recommended for GSC)'
     )
     parser.add_argument(
         '--preview',
@@ -305,7 +307,7 @@ def main():
         output_file=args.output,
         min_probability=args.min_prob,
         cumulative_threshold=args.cumulative,
-        remove_identity_unary=not args.keep_identity
+        remove_unary_rules=not args.keep_unary
     )
 
     # Preview top rules
