@@ -108,22 +108,59 @@ def collapse_grammar(grammar_file, output_file=None, min_probability=1e-10):
     print(f"\nProcessing complete:")
     print(f"  Total Berkeley rules: {total_rules:,}")
     print(f"  Skipped (parse errors): {skipped_rules:,}")
-    print(f"  Collapsed base rules: {len(rule_probs):,}")
+    print(f"  Collapsed base rules (before normalization): {len(rule_probs):,}")
     print(f"  Reduction ratio: {len(rule_probs) / total_rules:.1%}")
+
+    # Normalize probabilities by LHS (so rules with same LHS sum to 1.0)
+    print(f"\nNormalizing probabilities by LHS...")
+
+    # Group rules by LHS
+    lhs_groups = defaultdict(dict)  # lhs -> {rhs: prob}
+    for rule, prob in rule_probs.items():
+        lhs, rhs = rule.split(' -> ', 1)
+        lhs_groups[lhs][rhs] = prob
+
+    # Normalize each LHS group
+    normalized_rules = {}
+    lhs_totals = {}
+    for lhs, rhs_dict in lhs_groups.items():
+        total = sum(rhs_dict.values())
+        lhs_totals[lhs] = total
+        for rhs, prob in rhs_dict.items():
+            normalized_prob = prob / total if total > 0 else 0.0
+            rule = f"{lhs} -> {rhs}"
+            normalized_rules[rule] = normalized_prob
+
+    print(f"  Normalized {len(lhs_groups):,} LHS categories")
+    print(f"  Total normalized rules: {len(normalized_rules):,}")
+
+    # Show normalization stats for a few categories
+    print(f"\n  Sample LHS normalization:")
+    for lhs in sorted(lhs_groups.keys())[:5]:
+        print(f"    {lhs}: {len(lhs_groups[lhs])} rules, original sum = {lhs_totals[lhs]:.4f}")
 
     # Filter by minimum probability and format for GSC
     print(f"\nFiltering rules with probability >= {min_probability}...")
 
     gsc_rules = []
-    total_probability = 0.0
+    filtered_count = 0
 
-    for rule, prob in sorted(rule_probs.items(), key=lambda x: -x[1]):
+    for rule, prob in sorted(normalized_rules.items(), key=lambda x: -x[1]):
         if prob >= min_probability:
             gsc_rules.append(f"{prob:.10f} {rule}")
-            total_probability += prob
+        else:
+            filtered_count += 1
 
     print(f"  Rules after filtering: {len(gsc_rules):,}")
-    print(f"  Total probability mass: {total_probability:.6f}")
+    print(f"  Rules filtered out: {filtered_count:,}")
+
+    # Verify normalization (sample check)
+    print(f"\n  Verification: Checking normalization for sample LHS categories...")
+    sample_lhs = list(lhs_groups.keys())[:3]
+    for lhs in sample_lhs:
+        lhs_sum = sum(prob for rule, prob in normalized_rules.items()
+                      if rule.startswith(f"{lhs} ->"))
+        print(f"    {lhs}: sum of probabilities = {lhs_sum:.10f}")
 
     # Join into final grammar string
     grammar_str = '\n'.join(gsc_rules)

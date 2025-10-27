@@ -2,21 +2,22 @@
 
 ## Summary
 
-Successfully collapsed Berkeley Parser SM5 grammar from **684,239 rules** to **4,644 rules** (99.3% reduction).
+Successfully collapsed Berkeley Parser SM5 grammar from **684,239 rules** to **4,598 rules** (99.3% reduction).
 
 ## Files Created
 
 1. **`collapse_berkeley_grammar.py`** - Main conversion script
-2. **`collapsed_grammar_sm5.txt`** - Output grammar in GSC format (4,644 rules)
+2. **`collapsed_grammar_sm5.txt`** - Output grammar in GSC format (4,598 rules)
 3. **`test_collapsed_grammar.py`** - Test script to verify GSC compatibility
 
-## Method: Proposal 1 - Full Collapse with Probability Summation
+## Method: Proposal 1 - Full Collapse with Probability Summation and Normalization
 
 ### What was done:
 
 1. **Strip subcategories**: Remove all subscripts (e.g., `S_1`, `S_2`, ..., `S_13` → `S`)
 2. **Group rules**: Collect all rules that have the same base form
 3. **Sum probabilities**: Add up probabilities for each unique base rule
+4. **Normalize by LHS**: For each left-hand side category, normalize all its rules so they sum to 1.0 (proper PCFG format)
 
 ### Example:
 
@@ -28,31 +29,47 @@ S_3 -> SBAR_3 VP_5  9.8916615E-6
 ...
 ```
 
-**Collapsed (base categories):**
+**Collapsed and normalized (base categories):**
 ```
-S -> SBAR VP  0.0000XXXXXX  (sum of all subcategory probabilities)
+S -> SBAR VP  0.XXXXXX  (sum of subcategory probabilities, then normalized so all S rules sum to 1.0)
+S -> NP VP    0.YYYYYY
+...
+(all S -> ... rules sum to 1.0)
 ```
 
 ## Statistics
 
 - **Input**: 684,239 Berkeley rules
-- **Output**: 4,644 collapsed rules
+- **Output**: 4,598 collapsed and normalized rules
 - **Reduction**: 99.3%
-- **Total probability mass**: 1,092.16 (normalized sum across all rules)
+- **LHS categories**: 98 unique categories
+- **Normalization**: All rules for each LHS sum to exactly 1.0 (proper PCFG format)
 
-## Top Rules in Collapsed Grammar
+## Sample Rules in Collapsed Grammar
 
+### Unary terminal rules (probability 1.0):
 ```
-32.0000000000 NP -> NP
-31.0000000000 JJ -> JJ
-30.0000000000 NNP -> NNP
-30.0000000000 NN -> NN
-30.0000000000 NNS -> NNS
-12.1018326731 PP -> IN NP
-9.7807213630 ADVP -> RB
-4.9600640933 S -> NP VP
-4.3694740707 SBAR -> IN S
-3.5632482695 S -> VP
+1.0000000000 IN -> IN
+1.0000000000 DT -> DT
+1.0000000000 NN -> NN
+```
+
+### S rules (sum to 1.0):
+```
+0.4949271554 S -> S
+0.1888361856 S -> NP VP
+0.1356575638 S -> VP
+0.0416743493 S -> @S VP
+... (120 S rules total)
+```
+
+### NP rules (sum to 1.0):
+```
+0.4999883762 NP -> NP
+0.0469430863 NP -> DT NN
+0.0431049071 NP -> @NP NN
+0.0350492981 NP -> NP PP
+... (230 NP rules total)
 ```
 
 ## Usage
@@ -92,17 +109,22 @@ hg = gsc.HarmonicGrammar(pcfg=PCFG, root=ROOT, max_sent_len=MAXLEN)
 
 ## Notes
 
-1. **Probability values**: The collapsed probabilities represent the sum of all subcategory probabilities. Many high-frequency unary rules (like `NP -> NP`) have large values (20-32) because they sum across 20-32 subcategories.
+1. **Probability normalization**: After collapsing subcategories by summing their probabilities, the script normalizes all rules with the same LHS so they sum to exactly 1.0. This ensures proper PCFG format that GSC expects.
 
-2. **Normalization**: GSC may automatically normalize probabilities for each LHS category during initialization. If needed, you can add normalization to the script.
+2. **Verification**: You can verify normalization by checking that all rules for a given LHS sum to 1.0:
+   ```bash
+   grep '^[0-9.e-]* S ->' collapsed_grammar_sm5.txt | awk '{print $1}' | \
+     python3 -c "import sys; print(sum(float(x) for x in sys.stdin))"
+   # Output: 1.0
+   ```
 
 3. **Lexicon handling**: This script only handles the grammar rules. The lexicon file would need similar processing to remove subcategories.
 
-4. **Training time**: With 4,644 rules (vs 684,239), GSC training should be much more feasible. Compare with toy grammar 1 which has ~10 rules and takes 40-60 minutes.
+4. **Training time**: With 4,598 rules (vs 684,239), GSC training should be much more feasible. Compare with toy grammar 1 which has ~10 rules and takes 40-60 minutes.
 
 ## Next Steps
 
-If 4,644 rules is still too many for GSC training:
+If 4,598 rules is still too many for GSC training:
 
 1. **Increase min-prob threshold**: Filter out low-probability rules (e.g., `--min-prob 1e-6`)
 2. **Use Proposal 2**: Keep only top-K subcategories per category
