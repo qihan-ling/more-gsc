@@ -116,10 +116,33 @@ class PCFG():
         # {'m': fname_m, 'd1': fname_d1, 'd2': fname_d2, 'p': probability}
 
         rules = [rule_str.strip() for rule_str in self.pcfg_str.split('\n')]
-        
-        # remove comments
-        rules = [rule.split('#')[0].strip() for rule in rules]
-        rules = [rule for rule in rules if rule != '']
+
+        # remove comments (but preserve '#' as a grammar symbol)
+        # Comments are lines starting with '#' or '  #' after a rule
+        # Grammar symbols '#' appear in RHS without extra spaces: "-> #" or "-> # CD"
+        rules_cleaned = []
+        for rule in rules:
+            if not rule or rule.startswith('#'):
+                # Skip empty lines and comment lines
+                continue
+
+            # If rule contains '->', check if '#' is in the RHS (part of grammar)
+            # vs after RHS (a comment)
+            if '->' in rule:
+                # '#' is a grammar symbol if it appears right after -> or between symbols
+                # Comments have extra space: "rule  # comment" vs "rule -> #" or "rule -> # symbol"
+                # Simple heuristic: if there are 2+ spaces before #, it's likely a comment
+                if '  #' in rule:
+                    rule = rule.split('  #')[0].strip()
+            else:
+                # No arrow, could be malformed or comment
+                if '#' in rule:
+                    rule = rule.split('#')[0].strip()
+
+            rule = rule.strip()
+            if rule:
+                rules_cleaned.append(rule)
+        rules = rules_cleaned
 
         rules_new = []
         for rule in rules:
