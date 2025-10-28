@@ -8,15 +8,16 @@ import numpy as np
 
 PCFG_G1 = '''
 0.35 S -> N Vi
-0.30 S -> N Vi PP      # 0.60 * 0.5
-0.18 S -> N BE Vpp    # 0.60 * 0.3
-0.12 S -> N BE VPpp   # 0.60 * 0.2
+0.60 S -> N VP
 0.05 S -> NP Vi
 
 1.0 NP -> N RC
 1.0 RC -> Vpp PP
 1.0 VPpp -> Vpp PP
 1.0 PP -> P N
+0.5 VP -> Vi PP
+0.3 VP -> BE Vpp
+0.2 VP -> BE VPpp
 '''
 
 ROOT = 'S'
