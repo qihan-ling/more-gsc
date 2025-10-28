@@ -4763,9 +4763,8 @@ class GscNet():
             p = corpus['prob_sent'][si]
             # stat['bindings'] += p * state
             indices = np.where(state == 1)[0]
-            # Convert to CPU if CuPy array, then create tuple of Python ints
-            indices = indices.get() if hasattr(indices, 'get') else indices
-            gp_key = tuple(int(i) for i in indices)
+            # Convert to CPU if CuPy (CuPy arrays are unhashable)
+            gp_key = tuple(indices.get() if hasattr(indices, 'get') else indices)
             stat['trees'][gp_key] = p
 
             for bid in list(gp_key):
@@ -4846,8 +4845,7 @@ class GscNet():
             prob_bindings += p * state
 
             indices = np.where(state == 1)[0]
-            indices = indices.get() if hasattr(indices, 'get') else indices
-            gp_key = tuple(int(i) for i in indices)
+            gp_key = tuple(indices.get() if hasattr(indices, 'get') else indices)
             self.corpus['prob']['trees'][gp_key] = p
             self.corpus['prob']['trees_0'][gp_key] = p
 
@@ -6076,15 +6074,13 @@ class GscNet():
                     if self.train_opts['ema_stat_weight'] > 0 and log_ema_stat:
                         for si, state in enumerate(self.corpus['target']):
                             indices = np.where(state == 1)[0]
-                            indices = indices.get() if hasattr(indices, 'get') else indices
-                            gp_key = tuple(int(i) for i in indices)
+                            gp_key = tuple(indices.get() if hasattr(indices, 'get') else indices)
                             if gp_key in stat_Q_new['trees']:
                                 prob_sent_report[si] = stat_Q_new['trees'][gp_key]
                     else:
                         for si, state in enumerate(self.corpus['target']):
                             indices = np.where(state == 1)[0]
-                            indices = indices.get() if hasattr(indices, 'get') else indices
-                            gp_key = tuple(int(i) for i in indices)
+                            gp_key = tuple(indices.get() if hasattr(indices, 'get') else indices)
                             if gp_key in stat_Q['trees']:
                                 prob_sent_report[si] = stat_Q['trees'][gp_key]
                     prob_sent_report_list.append(list(prob_sent_report))
