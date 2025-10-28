@@ -4758,13 +4758,19 @@ class GscNet():
         # stat['bindings'] = np.zeros(self.num_bindings)
         # binding probability
         # prob_sent: change format
-        for si, state in enumerate(corpus['target']):
+
+        # Optimize: Transfer corpus['target'] to CPU once if it's on GPU
+        # This avoids repeated GPU→CPU transfers in the loop
+        corpus_target = corpus['target']
+        if hasattr(corpus_target, 'get'):  # Is CuPy array
+            corpus_target = corpus_target.get()  # Single GPU→CPU transfer
+
+        for si, state in enumerate(corpus_target):
 
             p = corpus['prob_sent'][si]
             # stat['bindings'] += p * state
-            indices = np.where(state == 1)[0]
-            # Convert to CPU if CuPy (CuPy arrays are unhashable)
-            gp_key = tuple(indices.get() if hasattr(indices, 'get') else indices)
+            indices = np.where(state == 1)[0]  # Now on CPU, no transfer needed
+            gp_key = tuple(indices)
             stat['trees'][gp_key] = p
 
             for bid in list(gp_key):
@@ -4837,15 +4843,20 @@ class GscNet():
         self.corpus['prob']['treelets_0'] = {}
         self.corpus['prob']['trees_0'] = {}
 
+        # Optimize: Transfer corpus['target'] to CPU once if it's on GPU
+        corpus_target = self.corpus['target']
+        if hasattr(corpus_target, 'get'):
+            corpus_target = corpus_target.get()
+
         # binding probability
         # prob_sent: change format
         prob_bindings = np.zeros(self.num_bindings)
-        for si, state in enumerate(self.corpus['target']):
+        for si, state in enumerate(corpus_target):
             p = self.corpus['prob_sent'][si]
             prob_bindings += p * state
 
             indices = np.where(state == 1)[0]
-            gp_key = tuple(indices.get() if hasattr(indices, 'get') else indices)
+            gp_key = tuple(indices)
             self.corpus['prob']['trees'][gp_key] = p
             self.corpus['prob']['trees_0'][gp_key] = p
 
