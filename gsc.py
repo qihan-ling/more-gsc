@@ -362,6 +362,8 @@ class PCFG():
         else:
             if not isinstance(idx, list):
                 idx = [idx]
+            # Convert to Python ints (handles CuPy arrays)
+            idx = [_to_int(i) for i in idx]
             return [self.filler_names[ii] for ii in idx]
 
     def find_fillers(self, fnames):
@@ -1032,6 +1034,8 @@ class BrickRole(object):
         else:
             if not isinstance(idx, list):
                 idx = [idx]
+            # Convert to Python ints (handles CuPy arrays)
+            idx = [_to_int(i) for i in idx]
             return [self.role_names[ii] for ii in idx]
 
     def is_bracketed(self, rname_str):
@@ -1862,6 +1866,8 @@ class HarmonicGrammar():
         else:
             if not isinstance(idx, list):
                 idx = [idx]
+            # Convert to Python ints (handles CuPy arrays)
+            idx = [_to_int(i) for i in idx]
             return [self.binding_names[ii] for ii in idx]
 
     def get_mothers(self, bname):
@@ -4642,6 +4648,8 @@ class GscNet():
             pvals = counts / counts.sum()
 
         idx = np.argsort(pvals)[::-1]
+        # Convert idx to list of Python ints for indexing (CuPy arrays can't index lists)
+        idx = [_to_int(i) for i in idx]
         sentences = [sentences[si] for si in idx]
         pvals = np.array([pvals[si] for si in idx])
         targets = np.array([targets[si] for si in idx])
