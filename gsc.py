@@ -2,9 +2,21 @@
 # Pyeong Whan Cho (pyeongwhan.cho@gmail.com)
 
 import sys
-import numpy as np
+
+# Try to use CuPy (GPU) if available, fall back to NumPy (CPU)
+try:
+    import cupy as np
+    from cupy import linalg
+    import numpy as np_cpu  # Keep CPU numpy for some operations
+    print("gsc.py: Using CuPy (GPU acceleration enabled)")
+    GPU_AVAILABLE = True
+except ImportError:
+    import numpy as np
+    from numpy import linalg
+    np_cpu = np  # Same as np when no GPU
+    GPU_AVAILABLE = False
+
 import numbers
-from numpy import linalg
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import pickle
