@@ -13,6 +13,7 @@ import copy
 import time
 from matplotlib.patches import Rectangle
 
+
 class Node():
     # Class PCFG uses this Node class to represent a binary tree structure
 
@@ -25,7 +26,7 @@ class Node():
         str1 = self.extract().replace('()', '').replace(', )', ')')[:-2]
         str1 = str1.replace('(', '( ').replace(')', ' )')
         return str1
-        
+
     def add_child(self, node):
         self.children.append(node)
         self.children[-1].mother = self
@@ -37,7 +38,7 @@ class Node():
         ret += "), "
         return ret
 
-    def get_descendants(self):        
+    def get_descendants(self):
         ret = []
         for child in self.children:
             ret.append(child)
@@ -51,7 +52,7 @@ class Node():
                 terminals.append(node)
         return terminals
 
-    
+
 class PCFG():
 
     def __init__(self, pcfg, root, opts=None):
@@ -116,7 +117,7 @@ class PCFG():
         # {'m': fname_m, 'd1': fname_d1, 'd2': fname_d2, 'p': probability}
 
         rules = [rule_str.strip() for rule_str in self.pcfg_str.split('\n')]
-        
+
         # remove comments
         rules = [rule.split('#')[0].strip() for rule in rules]
         rules = [rule for rule in rules if rule != '']
@@ -287,7 +288,8 @@ class PCFG():
                         else:
                             d2 = None
 
-                        rule_new = {'m': token, 'd1': d1, 'd2': d2, 'p': rule['p']}
+                        rule_new = {'m': token, 'd1': d1,
+                                    'd2': d2, 'p': rule['p']}
                         if rule_new not in rules_new:
                             rules_new.append(rule_new)
 
@@ -295,7 +297,7 @@ class PCFG():
                 # Root symbols may occur on the RHS of a recursive rewrite rule.
                 # In those cases, pos_f symbols will be added to those root symbols.
                 # For consistency, add pos_f symbols to root symbols
-                # when a grammar does not have a recursive rule with root symbols. 
+                # when a grammar does not have a recursive rule with root symbols.
                 if self.opts['sep'] not in rule['m']:
                     rule['m'] += sep + role_names[0]
 
@@ -317,11 +319,11 @@ class PCFG():
     def _sort_rules(self):
 
         expansion_rules = [rule for rule in self.rules
-                           if (self.opts['f_empty'] in rule['m']) or 
+                           if (self.opts['f_empty'] in rule['m']) or
                               (self.opts['f_root'] in rule['m'])]
         copy_rules = self.subset_copy_rules()
         non_copy_rules = [rule for rule in self.rules
-                          if (rule not in copy_rules) and 
+                          if (rule not in copy_rules) and
                              (rule not in expansion_rules)]
 
         copy_rules_sorted = sorted(copy_rules, key=lambda x: x['m'])
@@ -572,8 +574,8 @@ class PCFG():
                     elif rule['d1'] is None:
                         print(rule['m'] + ' -> ' + rule['d2'])
                     else:
-                        print(rule['m'] + ' -> ' + rule['d1'] + ' ' + rule['d2'])
-
+                        print(rule['m'] + ' -> ' +
+                              rule['d1'] + ' ' + rule['d2'])
 
     def has_rule(self, rule):
         '''Returns (bool) after testing whether rule (dict) is in
@@ -600,8 +602,8 @@ class PCFG():
 
         return [f for f in self.filler_names
                 if (f not in self.get_nonterminals()) and
-                   (f != self.opts['null']) and 
-                   (self.get_types(f)[0] not in self.root)] # and (f != self.opts['f_empty'])]
+                   (f != self.opts['null']) and
+                   (self.get_types(f)[0] not in self.root)]  # and (f != self.opts['f_empty'])]
 
     def find_terminals(self):
         '''Returns (list) of indices (int) of terminal symbols, excluding
@@ -808,9 +810,9 @@ class PCFG():
         # roots = [f for f in self.get_fillers()
         #          if self.root in f]
 
-        roots = self.get_fillers_type(self.root, 
-            ignore_pos_f=self.opts['use_pos_f'],
-            ignore_bracket=True, ignore_copy=False)
+        roots = self.get_fillers_type(self.root,
+                                      ignore_pos_f=self.opts['use_pos_f'],
+                                      ignore_bracket=True, ignore_copy=False)
 
         if self.opts['use_pos_f']:
             roots = [root for root in roots
@@ -911,7 +913,7 @@ class PCFG():
                     str1, d1, p1 = expand(d1)
                     terminals += str1
                     p *= p1
-                
+
                 d2 = Node(d2sym)
                 node.add_child(d2)
                 if self.is_terminal(d2sym):
@@ -1272,7 +1274,6 @@ class HarmonicGrammar():
         self.opts['add1_to_root'] = True
         self.opts['H_root'] = -3.
 
-
     def _update_opts(self, opts):
 
         if opts is not None:
@@ -1284,13 +1285,16 @@ class HarmonicGrammar():
             # CHECK
             self.opts['f_root'] += self.opts['sep'] + self.opts['pos_f'][0]
             self.opts['f_empty'] += self.opts['sep'] + self.opts['pos_f'][1]
-            self.opts['f_empty_copy'] += self.opts['sep'] + self.opts['pos_f'][1]
+            self.opts['f_empty_copy'] += self.opts['sep'] + \
+                self.opts['pos_f'][1]
 
         if self.opts['add_copy_rules']:
             if self.opts['pos_copy'] == 'l':
-                self.opts['f_empty_copy'] = self.opts['copy'] + self.opts['f_empty_copy']
+                self.opts['f_empty_copy'] = self.opts['copy'] + \
+                    self.opts['f_empty_copy']
             elif self.opts['pos_copy'] == 'r':
-                self.opts['f_empty_copy'] = self.opts['f_empty_copy'] + self.opts['copy']
+                self.opts['f_empty_copy'] = self.opts['f_empty_copy'] + \
+                    self.opts['copy']
 
     def _create_roles(self):
         if self.opts['role_system'] == 'brick_role':
@@ -1416,12 +1420,12 @@ class HarmonicGrammar():
 
             for root in roots:
                 rule = {
-                    'm': self.opts['f_root'], 
+                    'm': self.opts['f_root'],
                     'd1': root, 'd2': self.opts['f_empty_copy'], 'p': None}
                 if rule not in self.g.rules:
                     self.g.rules.append(rule)
 
-            rule = {'m': self.opts['f_empty_copy'], 
+            rule = {'m': self.opts['f_empty_copy'],
                     'd1': None, 'd2': self.opts['f_empty'], 'p': None}
             if rule not in self.g.rules:
                 self.g.rules.append(rule)
@@ -1598,8 +1602,8 @@ class HarmonicGrammar():
                             'rel': '0', 'H': null_bias, 'rule': 'unary',
                             'br': self.g.is_bracketed(filler)}
 
-                #if ('c' not in filler) and self.g.is_terminal(filler):
-                # PWC-20190731: I don't know why but self.opts['copy'] was 
+                # if ('c' not in filler) and self.g.is_terminal(filler):
+                # PWC-20190731: I don't know why but self.opts['copy'] was
                 #             : unintendedly replaced with 'c', which is wrong.
                 if (self.opts['copy'] not in filler) and self.g.is_terminal(filler):
                     rule = {'f1': filler, 'f2': None,
@@ -1711,7 +1715,8 @@ class HarmonicGrammar():
         use_pos_f = self.g.opts['use_pos_f']
 
         if rule_types is None:
-            rule_types = ['binary', 'unary', 'copy', 'expansion_binary', 'expansion_unary', 'competition']
+            rule_types = ['binary', 'unary', 'copy',
+                          'expansion_binary', 'expansion_unary', 'competition']
         elif not isinstance(rule_types, list):
             rule_types = [rule_types]
 
@@ -1927,13 +1932,13 @@ class HarmonicGrammar():
         if min_sent_len is None:
             min_sent_len = 1
 
-        # NOTE: the program uses the orginal grammar object g0, not the augmented version g. 
+        # NOTE: the program uses the orginal grammar object g0, not the augmented version g.
         sent, parse, p = self.g0.generate_sentence(
             min_sent_len=min_sent_len, max_sent_len=max_sent_len, use_type=use_type)
 
         if self.opts['role_system'] == 'brick_role':
             parse = self.convert(parse)
-        
+
         return sent, parse, p
 
     def convert(self, parse):
@@ -1956,7 +1961,7 @@ class HarmonicGrammar():
                     (node1.mother.sym == node2.mother.sym) and \
                     (node1.mother.children.index(node1) == 0) and \
                         (node2.mother.children.index(node2) == 1):
-                        parse_new[lv + 1][pos - 1] = node1.mother
+                    parse_new[lv + 1][pos - 1] = node1.mother
 
                 else:
                     if node1.mother is not None:
@@ -2021,15 +2026,18 @@ class HarmonicGrammar():
                 if lv < len(parse):
                     bnames = parse[lv]
                     if lv == 0:
-                        bnames += [self.opts['f_empty']] * (targ_len - len(bnames))
+                        bnames += [self.opts['f_empty']] * \
+                            (targ_len - len(bnames))
                     else:
-                        bnames += [self.opts['f_empty_copy']] * (targ_len - len(bnames))
+                        bnames += [self.opts['f_empty_copy']] * \
+                            (targ_len - len(bnames))
                     parse_new.append(bnames)
                 elif lv + 1 == self.opts['max_sent_len']:
                     parse_new.append([self.opts['f_root']])
                 else:
-                    parse_new.append([self.opts['f_root']] + [self.opts['f_empty_copy']] * (targ_len - 1))
-            
+                    parse_new.append(
+                        [self.opts['f_root']] + [self.opts['f_empty_copy']] * (targ_len - 1))
+
             parse = parse_new
 
         return parse
@@ -2415,7 +2423,7 @@ class GscNet():
     #####################################################################
 
     def _build_model(self):
-        # Initialize the model by setting weight and bias parameters to 
+        # Initialize the model by setting weight and bias parameters to
         # some default values specified in HG.
         # NOTE: Complex competition rules and null rules were removed temporarily.
 
@@ -2591,14 +2599,16 @@ class GscNet():
                             idx = self.find_bindings(bname)
                             lv, pos = self.hg.roles.str2tuple(rname)
                             if lv == 1:
-                                self.set_bias(bname, self.hg.opts['H_root_illegitimate'])
+                                self.set_bias(
+                                    bname, self.hg.opts['H_root_illegitimate'])
                                 bC[idx] = self.bC[idx]
                             elif lv == self.hg.opts['max_sent_len']:
                                 self.set_bias(bname, self.hg.opts['H_unary_2'])
                                 bC[idx] = self.bC[idx]
                             else:
                                 if pos == 1:
-                                    self.set_bias(bname, self.hg.opts['H_unary_3'])
+                                    self.set_bias(
+                                        bname, self.hg.opts['H_unary_3'])
                                     bC[idx] = self.bC[idx]
                                 else:
                                     self.set_bias(
@@ -2616,14 +2626,16 @@ class GscNet():
                             idx = self.find_bindings(bname)
                             lv, pos = self.hg.roles.str2tuple(rname)
                             if lv == 1:
-                                self.set_bias(bname, self.hg.opts['H_root_illegitimate'])
+                                self.set_bias(
+                                    bname, self.hg.opts['H_root_illegitimate'])
                                 bC[idx] = self.bC[idx]
                             elif lv == self.hg.opts['max_sent_len']:
                                 self.set_bias(bname, self.hg.opts['H_root'])
                                 bC[idx] = self.bC[idx]
                             else:
                                 if pos == 1:
-                                    self.set_bias(bname, self.hg.opts['H_root'])
+                                    self.set_bias(
+                                        bname, self.hg.opts['H_root'])
                                     bC[idx] = self.bC[idx]
                                 else:
                                     if 'penalize_root_posN' in self.opts:
@@ -2886,7 +2898,7 @@ class GscNet():
             self.finalize_traces()
 
         # if log_trace and plot:
-        #     heatmap(self.traces['actC'].T, 
+        #     heatmap(self.traces['actC'].T,
         #             xticklabels='', yticklabels=self.binding_names)
 
     def check_divergence(self, tol=2.):
@@ -2915,28 +2927,28 @@ class GscNet():
         # self.opts['q_rate'] = 0.
         if phase1_maxdur > 0:
             H_pre_phase1 = self.H()
-            self.run(phase1_maxdur, 
-                    update_T=update_T,
-                    update_q=False,
-                    log_trace=log_trace,
-                    trace_list=trace_list,
-                    tol=tol,
-                    plot=False)
+            self.run(phase1_maxdur,
+                     update_T=update_T,
+                     update_q=False,
+                     log_trace=log_trace,
+                     trace_list=trace_list,
+                     tol=tol,
+                     plot=False)
             # H_after_phase1 = self.H()
             dur_phase1 = self.t - t_init
-            #hdiff.append(self.H() - H_pre_phase1)
+            # hdiff.append(self.H() - H_pre_phase1)
             hdiff.append(self.maxH - H_pre_phase1)
             lapse.append(dur_phase1)
 
         # Phase 2
         # self.opts['q_rate'] = q_rate_backup.copy()
         if phase2_maxdur > 0:
-            self.run(duration=duration, 
-                    update_T=update_T,
-                    update_q=True,
-                    log_trace=log_trace,
-                    trace_list=trace_list,
-                    plot=False)
+            self.run(duration=duration,
+                     update_T=update_T,
+                     update_q=True,
+                     log_trace=log_trace,
+                     trace_list=trace_list,
+                     plot=False)
             dur_phase2 = self.t - t_init - dur_phase1
             lapse.append(dur_phase2)
 
@@ -2946,12 +2958,12 @@ class GscNet():
         if phase3_maxdur > 0:
             H_pre_phase3 = self.H()
             self.run(phase3_maxdur,
-                    update_T=update_T,
-                    update_q=False,
-                    log_trace=log_trace,
-                    trace_list=trace_list,
-                    tol=tol,
-                    plot=False)
+                     update_T=update_T,
+                     update_q=False,
+                     log_trace=log_trace,
+                     trace_list=trace_list,
+                     tol=tol,
+                     plot=False)
             dur_phase3 = self.t - t_init - dur_phase1 - dur_phase2
             # hdiff.append(self.H() - H_pre_phase3)
             hdiff.append(self.maxH - H_pre_phase3)
@@ -3047,7 +3059,7 @@ class GscNet():
         self.act = self.C2N()
 
     def set_random_state(self, minact=0, maxact=1):
-        
+
         self.actC = np.random.uniform(
             minact, maxact, size=self.num_bindings)
         self.actCmat = self.vec2mat()
@@ -3105,14 +3117,16 @@ class GscNet():
 
         noise = np.sqrt(2 * self.T * self.dt) * \
             np.random.randn(self.num_units)
-        noise = self.C2N(np.sqrt(self.scale_constants) * self.N2C(noise))  # rescaling noise
+        noise = self.C2N(np.sqrt(self.scale_constants) *
+                         self.N2C(noise))  # rescaling noise
         self.act += noise
 
     def add_noiseC(self):
 
         noise = np.sqrt(2 * self.T * self.dt) * \
             np.random.randn(self.num_units)
-        noiseC = np.sqrt(self.scale_constants) * self.N2C(noise)  # rescaling noise
+        noiseC = np.sqrt(self.scale_constants) * \
+            self.N2C(noise)  # rescaling noise
         self.actC += noiseC
 
     def update_T(self):
@@ -3160,7 +3174,6 @@ class GscNet():
 
                 self.q_mask = self.vec2mat(self.q_mask).mean(axis=0)
 
-
     def clear_input(self):
 
         self.extC = np.zeros(self.num_bindings)
@@ -3173,7 +3186,7 @@ class GscNet():
         '''Set external input.'''
         # use_type -- allow A in addition to A:0
 
-        # NOTE: Now self.estr is multiplied to curr_extC 
+        # NOTE: Now self.estr is multiplied to curr_extC
 
         if not cumulative:
             # print('cleared')
@@ -3213,8 +3226,8 @@ class GscNet():
         self.ext = self.C2N(self.extC)
 
     def update_scale_constants(
-        self, pos=0, lv=0, scale_type=None, q_only=False,
-        symmetric=True):
+            self, pos=0, lv=0, scale_type=None, q_only=False,
+            symmetric=True):
 
         if scale_type is None:
             scale_type = self.opts['scale_type']
@@ -3244,7 +3257,7 @@ class GscNet():
                     elif scale_type == 'diagonal':
                         if symmetric:
                             weights[idx] = np.exp(-abs(lv0 +
-                                                    pos0 - (pos + 1)) * c)
+                                                       pos0 - (pos + 1)) * c)
                         else:
                             if lv0 + pos0 >= pos + 1:
                                 weights[idx] = np.exp(-(lv0 +
@@ -3347,8 +3360,10 @@ class GscNet():
             q = self.q
 
         hgrad_g = self.WC.dot(actC) + self.bC + self.extC
-        hgrad_b = self.opts['bowl_strength'] * (self.opts['bowl_center'] - actC)
-        hgrad_q0 = -2 * self.extend_rvec(rvec=q) * actC * (1 - actC) * (1 - 2 * actC)
+        hgrad_b = self.opts['bowl_strength'] * \
+            (self.opts['bowl_center'] - actC)
+        hgrad_q0 = -2 * self.extend_rvec(rvec=q) * \
+            actC * (1 - actC) * (1 - 2 * actC)
         ssq = np.sum(actCmat ** 2, axis=0)
         hgrad_q1 = -4 * self.opts['m'] * actC * self.extend_rvec(rvec=ssq - 1)
         return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
@@ -3521,7 +3536,8 @@ class GscNet():
         if 'maxeig' in self.traces:
             self.traces['maxeig'].append(maxeig(self.HHess()))
         if 'Hq0_role' in self.traces:
-            self.traces['Hq0_role'].append(self.Hq0_role(q=np.ones(self.q.shape)))
+            self.traces['Hq0_role'].append(
+                self.Hq0_role(q=np.ones(self.q.shape)))
         if 'scale_constants' in self.traces:
             self.traces['scale_constants'].append(self.scale_constants)
 
@@ -3538,7 +3554,6 @@ class GscNet():
     #####################################################################
 
     def _compute_recommended_bowl_strength(self):
-
         '''Compute the recommended value of bowl strength.
         Note that the value may change depending on external input.'''
 
@@ -3733,10 +3748,13 @@ class GscNet():
 
         if self.hg.opts['use_same_len']:
             if add_null_input:
-                num_empty_terminal_roles = self.hg.opts['max_sent_len'] - len(sent)
-                f_empty_type = self.hg.opts['f_empty'].split(self.hg.g.opts['sep'])[0]
+                num_empty_terminal_roles = self.hg.opts['max_sent_len'] - len(
+                    sent)
+                f_empty_type = self.hg.opts['f_empty'].split(
+                    self.hg.g.opts['sep'])[0]
                 sent_input += [
-                    f_empty_type + self.hg.opts['bsep'] + '(1,{})'.format(len(sent) + pos + 1)
+                    f_empty_type + self.hg.opts['bsep'] +
+                    '(1,{})'.format(len(sent) + pos + 1)
                     for pos in range(num_empty_terminal_roles)]
 
         return sent_input, self.get_target_state(parse_tree), p
@@ -3799,7 +3817,7 @@ class GscNet():
         maxlen_c = max([len(rname) for rname in self.role_names]) + 2
         maxlen_r = max([len(fname) for fname in self.filler_names]) + 2
         maxlen_c = max(maxlen_c, 9)
-        
+
         print('{:s}'.format('').rjust(maxlen_r), end='')
         for ri, rname in enumerate(self.role_names):
             print('{:s}'.format(rname).rjust(maxlen_c), end='')
@@ -3911,9 +3929,9 @@ class GscNet():
                 labels[idx] = '.'
             plt.legend(labels)
 
-    def plot_tree(self, actC=None, 
+    def plot_tree(self, actC=None,
                   panel_size=None, add_line=True, add_point=False,
-                  skip_bracketed=False, figsize=None, add_text=True, 
+                  skip_bracketed=False, figsize=None, add_text=True,
                   savefilename=None, gradC=None, add_grad=False, grad_scale=0.2,
                   linecolor='lightblue', linewidth=4, fontsize=10):
 
@@ -4037,12 +4055,12 @@ class GscNet():
                 for ii in idx_temp[:num_print_labels]:
                     if add_text:
                         plt.text(x1 + ii + xoffset,
-                                    y1 + curr_actC[ii] * 0.5,
-                                    self.filler_names[ii],
-                                    fontsize=fontsize * (curr_actC[ii] + 0.3),
-                                    color='k', fontweight='bold',
-                                    horizontalalignment='center',
-                                    verticalalignment='center')
+                                 y1 + curr_actC[ii] * 0.5,
+                                 self.filler_names[ii],
+                                 fontsize=fontsize * (curr_actC[ii] + 0.3),
+                                 color='k', fontweight='bold',
+                                 horizontalalignment='center',
+                                 verticalalignment='center')
 
                 for ii in range(self.num_fillers):
                     # if add_text:
@@ -4088,10 +4106,10 @@ class GscNet():
             plt.show()
 
     def plot_tree_actC_trace(
-        self, actC_trace=None, t_trace=None, downsampling=20,
-        windows=None, add_q_trace=False, top_k=None,
-        panel_size=None, skip_bracketed=False, figsize=None, print_winner=True, 
-        savefilename=None, linecolor='lightblue', linewidth=4, fontsize=10):
+            self, actC_trace=None, t_trace=None, downsampling=20,
+            windows=None, add_q_trace=False, top_k=None,
+            panel_size=None, skip_bracketed=False, figsize=None, print_winner=True,
+            savefilename=None, linecolor='lightblue', linewidth=4, fontsize=10):
 
         def add_panel(pos, size, color='black'):
             x1 = pos[0]
@@ -4123,7 +4141,7 @@ class GscNet():
             fig, ax = plt.subplots(figsize=figsize)
         else:
             fig, ax = plt.subplots()
-                    
+
         if windows is not None:
             windows0 = windows.copy()
             windows = []
@@ -4137,19 +4155,18 @@ class GscNet():
                 # plot bracketed roles
                 for pos in range(1, max_sent_len - lv + 2):
 
-
                     x1 = (pos - 1) * panel_width + (lv - 1) * 0.5 * panel_width
                     y1 = (lv - 1) * (2 * panel_height) - panel_height
                     add_panel((x1, y1), (panel_width, panel_height),
-                            color='darkgray')
+                              color='darkgray')
 
                     rname = '({:d},{:d})'.format(-lv, pos)
                     rind = self.find_roles(rname)
                     curr_actC_trace = actC_trace[:, rind]
 
-                    plt.plot(x1 + t_trace * panel_width / max(t_trace), 
-                        y1 + curr_actC_trace[:, ii], 
-                        linestyle='-', linewidth=linewidth)
+                    plt.plot(x1 + t_trace * panel_width / max(t_trace),
+                             y1 + curr_actC_trace[:, ii],
+                             linestyle='-', linewidth=linewidth)
 
             for pos in range(1, max_sent_len - lv + 2):
                 x1 = (pos - 1) * panel_width + (lv - 1) * 0.5 * panel_width
@@ -4159,7 +4176,8 @@ class GscNet():
                 else:
                     y1 = (lv - 1) * (2 * panel_height)
 
-                add_panel((x1, y1), (panel_width, panel_height), color='darkgray')
+                add_panel((x1, y1), (panel_width, panel_height),
+                          color='darkgray')
 
                 rname = '({:d},{:d})'.format(lv, pos)
                 rind = self.find_roles(rname)
@@ -4167,65 +4185,66 @@ class GscNet():
                 fidx = np.argsort(curr_actC_trace.sum(axis=0))[::-1]
 
                 if top_k is None:
-                    plt.plot(x1 + t_trace * panel_width / max(t_trace), 
-                        y1 + curr_actC_trace, 
-                        linestyle='-', linewidth=linewidth)
+                    plt.plot(x1 + t_trace * panel_width / max(t_trace),
+                             y1 + curr_actC_trace,
+                             linestyle='-', linewidth=linewidth)
                 else:
                     plt.plot(x1 + t_trace * panel_width / max(t_trace),
-                        y1 + curr_actC_trace[:, fidx[:top_k]], 
-                        linestyle='-', linewidth=linewidth)
+                             y1 + curr_actC_trace[:, fidx[:top_k]],
+                             linestyle='-', linewidth=linewidth)
 
                 if add_q_trace:
                     rind2 = self.role_names.index(rname)
-                    curr_q_trace = q_trace[:, rind2] / self.opts['q_max']   # normalize                    
-                    plt.plot(x1 + t_trace * panel_width / max(t_trace), 
-                        y1 + curr_q_trace, color='grey',
-                        linestyle='-.', linewidth=linewidth)
-                
+                    curr_q_trace = q_trace[:, rind2] / \
+                        self.opts['q_max']   # normalize
+                    plt.plot(x1 + t_trace * panel_width / max(t_trace),
+                             y1 + curr_q_trace, color='grey',
+                             linestyle='-.', linewidth=linewidth)
+
                 labs = '{}\n----\n{}'.format(
                     self.filler_names[fidx[0]], self.filler_names[fidx[1]])
-                
+
                 if print_winner:
                     plt.text(x1 + panel_width * 0.8,
-                            y1 + panel_height * 0.5,
-                            labs, 
-                            fontsize=fontsize,
-                            color='k', #fontweight='bold',
-                            horizontalalignment='center',
-                            verticalalignment='center')
-                
+                             y1 + panel_height * 0.5,
+                             labs,
+                             fontsize=fontsize,
+                             color='k',  # fontweight='bold',
+                             horizontalalignment='center',
+                             verticalalignment='center')
+
                 if windows is not None:
-                    
+
                     roleset_id = pos + lv - 1
-                    
+
                     for window in windows:
-                    
-                        plt.plot([x1 + window[0][1], x1 + window[0][1]], 
-                                [y1, y1 + 1.0],
-                                color='darkgray', linestyle=':')
-                        plt.text(x1 + window[0][0] + (window[0][1]-window[0][0])/2, 
-                                y1 + 0.85, 
-                                window[1], 
-                                horizontalalignment='center', 
-                                fontsize=fontsize)
-                    
+
+                        plt.plot([x1 + window[0][1], x1 + window[0][1]],
+                                 [y1, y1 + 1.0],
+                                 color='darkgray', linestyle=':')
+                        plt.text(x1 + window[0][0] + (window[0][1]-window[0][0])/2,
+                                 y1 + 0.85,
+                                 window[1],
+                                 horizontalalignment='center',
+                                 fontsize=fontsize)
+
                 if windows is not None:
-                    
+
                     roleset_id = pos + lv - 1
-                    
+
                     if roleset_id <= len(windows):
                         window = windows[roleset_id - 1]
                         add_window = True
-                        
+
                     else:
                         # wrap-up
                         window = [[windows[-1][0][1], panel_width]]
                         add_window = False
-                        
+
                     if add_window:
-                        plt.gca().add_patch(Rectangle((x1 + window[0][0], y1), 
-                                            window[0][1] - window[0][0], 
-                                            panel_height, 
+                        plt.gca().add_patch(Rectangle((x1 + window[0][0], y1),
+                                            window[0][1] - window[0][0],
+                                            panel_height,
                                             facecolor='red',
                                             alpha=0.05))
 
@@ -4242,12 +4261,12 @@ class GscNet():
             plt.savefig(savefilename)
         else:
             plt.show()
-            
+
     def plot_treelet_actC_trace(
-        self, actC_trace=None, downsampling=20, 
-        windows=None, num_treelets=3,
-        panel_size=None, skip_bracketed=False, figsize=None, print_winner=True, 
-        savefilename=None, linecolor='lightblue', linewidth=4, fontsize=10):
+            self, actC_trace=None, downsampling=20,
+            windows=None, num_treelets=3,
+            panel_size=None, skip_bracketed=False, figsize=None, print_winner=True,
+            savefilename=None, linecolor='lightblue', linewidth=4, fontsize=10):
 
         def add_panel(pos, size, color='black'):
             x1 = pos[0]
@@ -4280,7 +4299,7 @@ class GscNet():
 
     #     idx = (net.traces['t'] >= tmin) * (net.traces['t'] <= tmax)
     #     actC_trace = net.traces['actC'][idx, :]
-            
+
         if panel_size is None:
             panel_width = self.num_fillers
             panel_height = 1.
@@ -4289,8 +4308,7 @@ class GscNet():
             fig, ax = plt.subplots(figsize=figsize)
         else:
             fig, ax = plt.subplots()
-            
-                    
+
         if windows is not None:
             windows0 = windows.copy()
             windows = []
@@ -4300,23 +4318,22 @@ class GscNet():
 
         for lv in range(2, max_sent_len + 1):
 
-    #         if (not skip_bracketed) and (lv > 1):
-    #             # plot bracketed roles
-    #             for pos in range(1, max_sent_len - lv + 2):
+            #         if (not skip_bracketed) and (lv > 1):
+            #             # plot bracketed roles
+            #             for pos in range(1, max_sent_len - lv + 2):
 
+            #                 x1 = (pos - 1) * panel_width + (lv - 1) * 0.5 * panel_width
+            #                 y1 = (lv - 1) * (2 * panel_height) - panel_height
+            #                 add_panel((x1, y1), (panel_width, panel_height),
+            #                           color='darkgray')
 
-    #                 x1 = (pos - 1) * panel_width + (lv - 1) * 0.5 * panel_width
-    #                 y1 = (lv - 1) * (2 * panel_height) - panel_height
-    #                 add_panel((x1, y1), (panel_width, panel_height),
-    #                           color='darkgray')
+            #                 rname = '({:d},{:d})'.format(-lv, pos)
+            #                 rind = self.find_roles(rname)
+            #                 curr_actC_trace = actC_trace[:, rind]
 
-    #                 rname = '({:d},{:d})'.format(-lv, pos)
-    #                 rind = self.find_roles(rname)
-    #                 curr_actC_trace = actC_trace[:, rind]
-
-    #                 plt.plot(x1 + t_trace * panel_width / max(t_trace), 
-    #                     y1 + curr_actC_trace[:, ii], 
-    #                     linestyle='-', linewidth=linewidth)
+            #                 plt.plot(x1 + t_trace * panel_width / max(t_trace),
+            #                     y1 + curr_actC_trace[:, ii],
+            #                     linestyle='-', linewidth=linewidth)
 
             for pos in range(1, max_sent_len - lv + 2):
                 x1 = (pos - 1) * panel_width + (lv - 1) * 0.5 * panel_width
@@ -4326,10 +4343,12 @@ class GscNet():
                 else:
                     y1 = (lv - 1) * (2 * panel_height)
 
-                add_panel((x1, y1), (panel_width, panel_height), color='darkgray')
-                
+                add_panel((x1, y1), (panel_width, panel_height),
+                          color='darkgray')
+
                 rname = '({},{})'.format(lv, pos)
-                dp_all = compute_treelet_act_trace(self, actC_trace, rules, rname)
+                dp_all = compute_treelet_act_trace(
+                    self, actC_trace, rules, rname)
 
                 temp = np.argsort(dp_all.sum(axis=0))
                 focus_idx = temp[::-1][:num_treelets]
@@ -4342,57 +4361,56 @@ class GscNet():
     #             plt.ylabel('Treelet activation at {}'.format(rname))
     #             plt.grid()
     #             plt.show()
-                
 
     #             rname = '({:d},{:d})'.format(lv, pos)
     #             rind = self.find_roles(rname)
     #             curr_actC_trace = actC_trace[:, rind]
-                
+
     #             fidx = np.argsort(curr_actC_trace.sum(axis=0))[::-1]
 
     #             dp_all[:, focus_idx]
 
-                plt.plot(x1 + t_trace * panel_width / max(t_trace), 
-                    y1 + dp_all[:, focus_idx], 
-                    linestyle='-', linewidth=linewidth)
-                
+                plt.plot(x1 + t_trace * panel_width / max(t_trace),
+                         y1 + dp_all[:, focus_idx],
+                         linestyle='-', linewidth=linewidth)
+
                 yoff = 0.1
                 for lbi, lb in enumerate(labs_focus):
                     plt.text(x1 + panel_width * 0.5,
-                            y1 + panel_height * 0.5 - yoff * lbi,
-                            lb, 
-                            fontsize=8,
-                            color='k',
-                            horizontalalignment='left',
-                            verticalalignment='center')
-            
+                             y1 + panel_height * 0.5 - yoff * lbi,
+                             lb,
+                             fontsize=8,
+                             color='k',
+                             horizontalalignment='left',
+                             verticalalignment='center')
+
     #             labs = '{}\n----\n{}'.format(
     #                 self.filler_names[fidx[0]], self.filler_names[fidx[1]])
-                
+
     #             if print_winner:
     #                 plt.text(x1 + panel_width * 0.8,
     #                          y1 + panel_height * 0.5,
-    #                          labs_focus, #labs, 
+    #                          labs_focus, #labs,
     #                          fontsize=fontsize,
     #                          color='k', #fontweight='bold',
     #                          horizontalalignment='center',
     #                          verticalalignment='center')
-                
+
                 if windows is not None:
-                    
+
                     roleset_id = pos + lv - 1
-                    
+
                     if roleset_id <= len(windows):
                         window = windows[roleset_id - 1]
                         add_window = True
                     else:
                         window = [[windows[-1][0][1], panel_width]]
                         add_window = False
-                        
+
                     if add_window:
-                        plt.gca().add_patch(Rectangle((x1 + window[0][0], y1), 
-                                            window[0][1] - window[0][0], 
-                                            panel_height, 
+                        plt.gca().add_patch(Rectangle((x1 + window[0][0], y1),
+                                            window[0][1] - window[0][0],
+                                            panel_height,
                                             facecolor='red',
                                             alpha=0.05))
 
@@ -4585,8 +4603,8 @@ class GscNet():
     # Training
     # =======================================================================
 
-    def generate_corpus(self, nsamples=5000, 
-                        min_sent_len=None, max_sent_len=None, 
+    def generate_corpus(self, nsamples=5000,
+                        min_sent_len=None, max_sent_len=None,
                         use_type=True, use_freq=True):
 
         if max_sent_len is None:
@@ -4598,8 +4616,8 @@ class GscNet():
         counts = []
         for _ in range(nsamples):
             sentence, target, p = self.generate_sentence(
-                min_sent_len=min_sent_len, 
-                max_sent_len=max_sent_len, 
+                min_sent_len=min_sent_len,
+                max_sent_len=max_sent_len,
                 use_type=use_type)
             if sentence in sentences:
                 idx = sentences.index(sentence)
@@ -4621,21 +4639,21 @@ class GscNet():
         counts = np.array([counts[si] for si in idx])
 
         self.corpus = {'sentence': sentences,
-                       'target': targets, #targets_unique, 
-                       'count': counts, 
+                       'target': targets,  # targets_unique,
+                       'count': counts,
                        'prob_sent': pvals}
 
         # self.add_corpus_stat()
 
     def subset_corpus(self, bnames):
-        # NOTE: Currently, filler name types (e.g., A instead of A:0) 
+        # NOTE: Currently, filler name types (e.g., A instead of A:0)
         # are assumed to be used in binding names in both bnames and self.corpus['sentence'].
 
         if not isinstance(bnames, list):
             sys.exit('`bnames` should be a list object.')
-        
+
         nsent = len(self.corpus['sentence'])
-        
+
         idx = []
         for si, sent in enumerate(self.corpus['sentence']):
             if set(bnames).issubset(set(sent)):
@@ -4644,20 +4662,21 @@ class GscNet():
         corpus = {}
         for key in self.corpus:
             corpus[key] = [self.corpus[key][si]
-                        for si in range(nsent)
-                        if si in idx]
-            if key is not 'sentence':
+                           for si in range(nsent)
+                           if si in idx]
+            if key != 'sentence':
                 corpus[key] = np.array(corpus[key])
 
         # Normalize probabilities
         corpus['prob_sent'] /= corpus['prob_sent'].sum()
-        
+
         return corpus
 
     def train_parallel_parsing(self, add_null_input=True):
 
         # parallel_parser_nsamples = round(self.train_opts['num_trials'] * self.train_opts['parallel_parser_sample_ratio'])
-        parallel_parser_nsamples = round(self.train_opts['num_trials'] * self.train_opts['parallel_parser_num_trials'])
+        parallel_parser_nsamples = round(
+            self.train_opts['num_trials'] * self.train_opts['parallel_parser_num_trials'])
 
         dWC = np.zeros((self.num_bindings, self.num_bindings))
         dbC = np.zeros(self.num_bindings)
@@ -4672,11 +4691,12 @@ class GscNet():
             p = self.corpus['prob_sent']
 
         # print('Parsing {} sentences'.format(parallel_parser_nsamples))
-        idx_sent = np.random.choice(n_sent, parallel_parser_nsamples, replace=True, p=p)
+        idx_sent = np.random.choice(
+            n_sent, parallel_parser_nsamples, replace=True, p=p)
         acc = 0.
 
         for idx in idx_sent:
-                
+
             # idx = np.random.choice(n_sent, 1, replace=False, p=p)[0]
             sent = self.corpus['sentence'][idx]
             corpus0 = {}
@@ -4706,7 +4726,8 @@ class GscNet():
             self.clear_input()
             extC_token = self.extC.astype(bool).astype(int)
             kl_curr, xent_curr, err, err_log = self.cost(stat_P, stat_Q)
-            dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(err, extC_token)
+            dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(
+                err, extC_token)
             dWC += dWC_curr * scale_dWC
             dbC += dbC_curr * scale_dWC
 
@@ -4725,7 +4746,7 @@ class GscNet():
         # prob_sent: change format
         for si, state in enumerate(corpus['target']):
 
-            p = corpus['prob_sent'][si]            
+            p = corpus['prob_sent'][si]
             # stat['bindings'] += p * state
             gp_key = tuple(np.where(state == 1)[0])
             stat['trees'][gp_key] = p
@@ -4765,7 +4786,7 @@ class GscNet():
                         stat['binding_pairs'][pair_r] += p
                     else:
                         stat['binding_pairs'][pair_r] = p
-                        
+
         return stat
 
     def get_prefix(self):
@@ -4775,10 +4796,10 @@ class GscNet():
                 curr_prefix = sent[:(si+1)]
                 if curr_prefix not in prefix:
                     prefix.append(curr_prefix)
-                    
+
         # sort by length
         prefix.sort(key=len)
-                    
+
         return prefix
 
     def add_corpus_stat(self):
@@ -4788,7 +4809,8 @@ class GscNet():
                 'Create the corpus first by running the following command:\nGscNet.generate_corpus().\n')
 
         elif 'prob_sent' not in self.corpus:
-            sys.exit('Add a key named "prob_sent" with an appropriate probability distribution as its value to the dictionary, GscNet.corpus.')
+            sys.exit(
+                'Add a key named "prob_sent" with an appropriate probability distribution as its value to the dictionary, GscNet.corpus.')
 
         self.corpus['prob'] = {}
         self.corpus['prob']['bindings'] = np.zeros(self.num_bindings)
@@ -4819,7 +4841,7 @@ class GscNet():
         for role in self.role_names:
             if not self.hg.roles.is_terminal(role):
                 self.corpus['prob']['treelets'][role] = {}
-                self.corpus['prob']['binding_pairs'][role] = {'l':{}, 'r': {}}
+                self.corpus['prob']['binding_pairs'][role] = {'l': {}, 'r': {}}
                 for si, state in enumerate(self.corpus['target']):
                     p = self.corpus['prob_sent'][si]
                     daughters = self.hg.roles.get_daughters(role)
@@ -4918,7 +4940,7 @@ class GscNet():
 
             mask = np.ones(self.num_bindings)
             mask[idx] = np.nan
-            fbias_avg = np.nanmean(self.vec2mat(bC * mask), axis=1)            
+            fbias_avg = np.nanmean(self.vec2mat(bC * mask), axis=1)
             bC_new = np.tile(fbias_avg, self.num_roles)
             bC_new[idx] = bC[idx]
 
@@ -4951,7 +4973,7 @@ class GscNet():
             idx = self.train_opts['idx_mask_bias1']
             mask = np.ones(self.num_bindings)
             mask[idx] = np.nan
-            fbias_avg = np.nanmean(self.vec2mat(bC * mask), axis=1)            
+            fbias_avg = np.nanmean(self.vec2mat(bC * mask), axis=1)
             bC_new = np.tile(fbias_avg, self.num_roles)
             bC_new[idx] = bC[idx]
 
@@ -5054,9 +5076,9 @@ class GscNet():
 
         return WC_avg
 
-    #===============================================================
+    # ===============================================================
     # NOTE: Check conditional probability distributions
-    #===============================================================
+    # ===============================================================
 
     def get_cond_prob(self):
 
@@ -5079,7 +5101,7 @@ class GscNet():
                 # print(parse_key)
                 if not set(bidx).issubset(list(parse_key)):
                     prefix[pref][parse_key] = 0.
-                    
+
         # ambiguous terminals
         prefix0 = {}
         for pref in prefix:
@@ -5095,22 +5117,23 @@ class GscNet():
                     prefix0[tuple(bnames)][parse_key] = 0.
             for parse_key in prefix[pref]:
                 prefix0[tuple(bnames)][parse_key] += prefix[pref][parse_key]
-        
+
         prefix = prefix0
-        
-        # Normalize                        
+
+        # Normalize
         for pref in prefix:
             psum = 0.
             for key, val in prefix[pref].items():
                 psum += val
             for key in prefix[pref]:
-                prefix[pref][key] /= psum 
-                
+                prefix[pref][key] /= psum
+
         return prefix
 
     def run_prefix(self, prefix, update_q_discrete=False, log_trace=False):
         for wi, fname in enumerate(prefix):
-            self.run_word(fname, wi + 1, update_q_discrete=update_q_discrete, log_trace=log_trace)
+            self.run_word(
+                fname, wi + 1, update_q_discrete=update_q_discrete, log_trace=log_trace)
             self.store.append({'actC': self.actC, 'q': self.q})
 
     def run_word(self, fname, wpos, symmetric=True, update_q_discrete=False, log_trace=False):
@@ -5130,11 +5153,13 @@ class GscNet():
             update_q = True
 
         if self.opts['use_runC']:
-            self.runC(np.max(qinc) / self.opts['q_rate'], log_trace=log_trace, update_q=update_q)
+            self.runC(
+                np.max(qinc) / self.opts['q_rate'], log_trace=log_trace, update_q=update_q)
         else:
-            self.run(np.max(qinc) / self.opts['q_rate'], log_trace=log_trace, update_q=update_q)
+            self.run(np.max(qinc) / self.opts['q_rate'],
+                     log_trace=log_trace, update_q=update_q)
         self.opts['q_max'] = q_max_backup
-        
+
     def run_wrapup(self, update_q_discrete=False, log_trace=False, clear_input=True):
         # self.opts['q_max'] = q_max
         dur = np.max(self.opts['q_max'] - self.q)
@@ -5153,11 +5178,13 @@ class GscNet():
             self.update_scale_constants(pos=1)
 
         if self.opts['use_runC']:
-            self.runC(dur / self.opts['q_rate'], log_trace=log_trace, update_q=update_q)
+            self.runC(dur / self.opts['q_rate'],
+                      log_trace=log_trace, update_q=update_q)
         else:
-            self.run(dur / self.opts['q_rate'], log_trace=log_trace, update_q=update_q)
+            self.run(dur / self.opts['q_rate'],
+                     log_trace=log_trace, update_q=update_q)
         self.store.append({'actC': self.actC, 'qvec': self.q})
-        
+
     # def run_sent(self, sent, use_multiple_timescale=False,
     #              update_scale_constants=False, symmetric=True, scaling_factor=None,
     #              update_q_mask=True, decay_factor=0., wrapup_clear_input=False,
@@ -5193,7 +5220,7 @@ class GscNet():
     #         if update_q_mask:
     #             if hasattr(self, 'update_q_mask'):
     #                 self.update_q_mask(pos=ii + 1 + look_ahead)
-                
+
     #         self.extC *= decay_factor
     #         self.set_input(bname, use_type=use_type, cumulative=True)
     #         if self.opts['use_runC']:
@@ -5236,7 +5263,7 @@ class GscNet():
     #         # null_input = [self.hg.opts['f_empty'] + self.hg.opts['bsep'] + '(1,{})'.format(jj)
     #         #               for jj in range(len(sent) + 1, maxlen + 1)]
     #         # self.set_input(null_input, use_type=False, cumulative=True)
-    #         set_null_input(self, estr=estr_null, pos=len(sent) + 1, 
+    #         set_null_input(self, estr=estr_null, pos=len(sent) + 1,
     #             extend_pos=null_input_extend_pos, extend_lv=null_input_extend_lv,
     #             cumulative=True)  # CHECK
 
@@ -5252,15 +5279,16 @@ class GscNet():
     #         self.plot_tree2(scale=1.5)
 
     def run_sent(self, sent, word_rt=None, use_multiple_timescale=False,
-                    update_scale_constants=False, symmetric=True, scaling_factor=None,
-                    update_q_mask=True, decay_factor=0., wrapup_clear_input=False,
-                    use_type=True, disp=True,
-                    null_input_extend_pos=True, null_input_extend_lv=True,
-                    estr_null=2.0, plot_state=False):
+                 update_scale_constants=False, symmetric=True, scaling_factor=None,
+                 update_q_mask=True, decay_factor=0., wrapup_clear_input=False,
+                 use_type=True, disp=True,
+                 null_input_extend_pos=True, null_input_extend_lv=True,
+                 estr_null=2.0, plot_state=False):
 
         word_rt0 = []
         for ii, bname in enumerate(sent):
-            word_rt0.append((self.qpolicy[ii + 1] - self.qpolicy[ii]) / self.opts['q_rate'])
+            word_rt0.append(
+                (self.qpolicy[ii + 1] - self.qpolicy[ii]) / self.opts['q_rate'])
 
         if word_rt is not None:
             assert len(sent) == len(word_rt)
@@ -5302,7 +5330,7 @@ class GscNet():
                 if word_rt[ii] <= word_rt0[ii]:
                     self.runC(word_rt[ii])
                 else:
-                    self.runC(word_rt0[ii])                    
+                    self.runC(word_rt0[ii])
                     self.opts['q_rate'] = 0.
                     self.runC(word_rt[ii] - word_rt0[ii])
                     self.opts['q_rate'] = 1.
@@ -5350,9 +5378,9 @@ class GscNet():
             # null_input = [self.hg.opts['f_empty'] + self.hg.opts['bsep'] + '(1,{})'.format(jj)
             #               for jj in range(len(sent) + 1, maxlen + 1)]
             # self.set_input(null_input, use_type=False, cumulative=True)
-            set_null_input(self, estr=estr_null, pos=len(sent) + 1, 
-                extend_pos=null_input_extend_pos, extend_lv=null_input_extend_lv,
-                cumulative=True)  # CHECK
+            set_null_input(self, estr=estr_null, pos=len(sent) + 1,
+                           extend_pos=null_input_extend_pos, extend_lv=null_input_extend_lv,
+                           cumulative=True)  # CHECK
 
             # print(null_input)
         if self.opts['use_runC']:
@@ -5381,7 +5409,7 @@ class GscNet():
                     print('[%04d]' % (trial_id + 1), end='')
                     if (trial_id + 1) % (10 * progress) == 0:
                         print('')
-            
+
             self.reset(mu=self.ep, sd=self.train_opts['init_noise_mag'])
             # self.opts['q_max'] = 15.
             # self.set_state(mu=self.ep, sd=self.train_opts['init_noise_mag'])
@@ -5390,7 +5418,7 @@ class GscNet():
                 self.actC_list.append(list(self.store[-1]['actC']))
             else:
                 self.actC_list.append(list(self.actC))
-                
+
             self.run_wrapup(update_q_discrete=update_q_discrete)
             gp = self.read_grid_point(disp=False)
             idx = self.find_bindings(gp)
@@ -5412,7 +5440,7 @@ class GscNet():
 
         # self.actC_list = np.array(self.actC_list)
         # self.prob_bindings = actC_mean / num_trials
-        
+
     def ema_stat(self, stat_new, stat_old, weight=None):
 
         if weight is None:
@@ -5435,7 +5463,7 @@ class GscNet():
                     p = 1e-15
                 else:
                     p = max(1e-15, stat_new[obj][key])
-                
+
                 if key not in stat_old[obj]:
                     q = 1e-15
                 else:
@@ -5487,7 +5515,7 @@ class GscNet():
                     p = 1e-15
                 else:
                     p = max(1e-15, stat_P[obj][key])
-                
+
                 if key not in stat_Q[obj]:
                     q = 1e-15
                 else:
@@ -5531,7 +5559,7 @@ class GscNet():
                         p = 1e-15
                     else:
                         p = max(1e-15, stat_P['bindings'][key])
-                    
+
                     if key not in stat_Q['bindings']:
                         q = 1e-15
                     else:
@@ -5582,7 +5610,7 @@ class GscNet():
             if self.train_opts['coef']['trees'] > 0.:
                 for key, val in err['trees'].items():
 
-                    if key in keys_tree: # pwc: new
+                    if key in keys_tree:  # pwc: new
 
                         if self.train_opts['err_tree_positive_only']:
                             val = max(val, 0.)
@@ -5594,18 +5622,21 @@ class GscNet():
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
-                                idx_tb = [ii for ii in list(key) if ii in idx_terminal]
+                                idx_tb = [ii for ii in list(
+                                    key) if ii in idx_terminal]
                             else:
                                 idx_tb = list(key)
                             destr[idx_tb] += extC_token[idx_tb] * \
-                                val * self.train_opts['coef']['trees']  # * actC[idx_tb]
+                                val * \
+                                self.train_opts['coef']['trees']  # * actC[idx_tb]
 
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():
 
-                    if key in keys_treelet: # pwc: new
+                    if key in keys_treelet:  # pwc: new
                         key = list(key)
-                        dbC[key[0]] += val * self.train_opts['coef']['treelets']
+                        dbC[key[0]] += val * \
+                            self.train_opts['coef']['treelets']
 
                         if self.train_opts['update_estr']:
                             if not self.train_opts['update_estr_terminals_only']:
@@ -5613,10 +5644,11 @@ class GscNet():
                                     val * self.train_opts['coef']['treelets']
 
                 for key, val in err['bindings'].items():
-                    
+
                     if key in keys_binding:
                         if key in idx_terminal:
-                            dbC[key] += val * self.train_opts['coef']['treelets']
+                            dbC[key] += val * \
+                                self.train_opts['coef']['treelets']
 
                             if self.train_opts['update_estr']:
                                 destr[key] += extC_token[key] * val * \
@@ -5632,8 +5664,10 @@ class GscNet():
             if self.train_opts['coef']['binding_pairs'] > 0.:
                 for key, val in err['binding_pairs'].items():
                     key = list(key)
-                    dbC[key[0]] += val * self.train_opts['coef']['binding_pairs']
-                    dbC[key[1]] += val * self.train_opts['coef']['binding_pairs']
+                    dbC[key[0]] += val * \
+                        self.train_opts['coef']['binding_pairs']
+                    dbC[key[1]] += val * \
+                        self.train_opts['coef']['binding_pairs']
 
             if self.train_opts['coef']['bindings'] > 0.:
                 for key, val in err['bindings'].items():
@@ -5667,36 +5701,45 @@ class GscNet():
             if self.train_opts['coef']['trees'] > 0.:
                 for key, val in err['trees'].items():
 
-                    if key in keys_tree: # pwc: new
+                    if key in keys_tree:  # pwc: new
 
                         if self.train_opts['err_tree_positive_only']:
                             val = max(val, 0.)
 
                         state = np.zeros(self.num_bindings)
                         state[list(key)] = 1.
-                        dWC += np.outer(state, state) * self.train_opts['mask0'] * val * self.train_opts['coef']['trees']
+                        dWC += np.outer(state, state) * \
+                            self.train_opts['mask0'] * val * \
+                            self.train_opts['coef']['trees']
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
-                                idx_tb = [ii for ii in list(key) if ii in idx_terminal]
+                                idx_tb = [ii for ii in list(
+                                    key) if ii in idx_terminal]
                             else:
                                 idx_tb = list(key)
                             destr[idx_tb] += extC_token[idx_tb] * \
-                                val * self.train_opts['coef']['trees']  # * actC[idx_tb]
+                                val * \
+                                self.train_opts['coef']['trees']  # * actC[idx_tb]
 
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():
 
-                    if key in keys_treelet: # pwc: new
+                    if key in keys_treelet:  # pwc: new
                         key = list(key)
 
                         if not self.train_opts['bias_only']:
-                            dWC[key[0], key[1]] += val * self.train_opts['coef']['treelets']
-                            dWC[key[1], key[0]] += val * self.train_opts['coef']['treelets']
-                            dWC[key[0], key[2]] += val * self.train_opts['coef']['treelets']
-                            dWC[key[2], key[0]] += val * self.train_opts['coef']['treelets']
+                            dWC[key[0], key[1]] += val * \
+                                self.train_opts['coef']['treelets']
+                            dWC[key[1], key[0]] += val * \
+                                self.train_opts['coef']['treelets']
+                            dWC[key[0], key[2]] += val * \
+                                self.train_opts['coef']['treelets']
+                            dWC[key[2], key[0]] += val * \
+                                self.train_opts['coef']['treelets']
 
-                        dWC[key[0], key[0]] += val * self.train_opts['coef']['treelets']
+                        dWC[key[0], key[0]] += val * \
+                            self.train_opts['coef']['treelets']
 
                         if self.train_opts['update_estr']:
                             if not self.train_opts['update_estr_terminals_only']:
@@ -5704,10 +5747,11 @@ class GscNet():
                                     val * self.train_opts['coef']['treelets']
 
                 for key, val in err['bindings'].items():
-                    
+
                     if key in keys_binding:
                         if key in idx_terminal:
-                            dWC[key, key] += val * self.train_opts['coef']['treelets']
+                            dWC[key, key] += val * \
+                                self.train_opts['coef']['treelets']
 
                             if self.train_opts['update_estr']:
                                 destr[key] += extC_token[key] * val * \
@@ -5723,8 +5767,10 @@ class GscNet():
             if self.train_opts['coef']['binding_pairs'] > 0.:
                 for key, val in err['binding_pairs'].items():
                     key = list(key)
-                    dWC[key[0], key[1]] += val * self.train_opts['coef']['binding_pairs']
-                    dWC[key[1], key[0]] += val * self.train_opts['coef']['binding_pairs']
+                    dWC[key[0], key[1]] += val * \
+                        self.train_opts['coef']['binding_pairs']
+                    dWC[key[1], key[0]] += val * \
+                        self.train_opts['coef']['binding_pairs']
 
             if self.train_opts['coef']['bindings'] > 0.:
                 for key, val in err['bindings'].items():
@@ -5764,35 +5810,45 @@ class GscNet():
         self.epoch_num = 0
         self.store = []
 
-        self.nonzero_all0 = False   # every grammatical parse was generated over the course of learning
-        self.nonzero_all1 = False   # every grammatical parse was generated during the last epoch
-        self.num_treelets_update = max(self.num_roles//4, 1)  # number of treelet frames to update in each iteration (asynchronous update)
+        # every grammatical parse was generated over the course of learning
+        self.nonzero_all0 = False
+        # every grammatical parse was generated during the last epoch
+        self.nonzero_all1 = False
+        # number of treelet frames to update in each iteration (asynchronous update)
+        self.num_treelets_update = max(self.num_roles//4, 1)
 
         # Set train_opts to default values
         self.train_opts = {}
         self.train_opts['report_cycle'] = 1
         self.train_opts['weight_decay'] = False
         self.train_opts['weight_decay_to'] = ['default', 'average'][0]
-        self.train_opts['weight_decay_factor'] = 0.001   # learning rate will be multiplied
+        # learning rate will be multiplied
+        self.train_opts['weight_decay_factor'] = 0.001
         self.train_opts['update_sister_harmony'] = False
         self.train_opts['bias2_only'] = False
         self.train_opts['free_update_null'] = False
         self.train_opts['num_treelet_update'] = None
         self.train_opts['num_tree_update'] = None      # or integer
-        self.train_opts['update_gram_only'] = False    # when set to True, updates non-zero weights only
+        # when set to True, updates non-zero weights only
+        self.train_opts['update_gram_only'] = False
         self.train_opts['ema_stat_weight'] = 0.
         self.train_opts['ema_trees_only'] = False
-        self.train_opts['use_err_gram_only'] = False   # when computing errors, ignore ungrammatical structures
-        self.train_opts['err_tree_positive_only'] = False     # consider only positive error for tree probabilities
+        # when computing errors, ignore ungrammatical structures
+        self.train_opts['use_err_gram_only'] = False
+        # consider only positive error for tree probabilities
+        self.train_opts['err_tree_positive_only'] = False
         self.train_opts['parallel_parser_train'] = False
-        self.train_opts['parallel_parser_dWC_scaler'] = 0.1  # each prob diff would be 0.999 - 0.001
-        self.train_opts['parallel_parser_sample_ratio'] = 0.1  # ratio of paralle parsing to production (depricated)
+        # each prob diff would be 0.999 - 0.001
+        self.train_opts['parallel_parser_dWC_scaler'] = 0.1
+        # ratio of paralle parsing to production (depricated)
+        self.train_opts['parallel_parser_sample_ratio'] = 0.1
         self.train_opts['parallel_parser_num_trials'] = 0
         self.train_opts['parallel_parser_sample_uniform'] = True
         self.train_opts['apply_wrapup_scale_constants'] = False
         self.train_opts['adaptive_training'] = False
         self.train_opts['asynchronous_update'] = False
-        self.train_opts['asynchronous_update_choose_errmax'] = False # use this only with the default coef setting
+        # use this only with the default coef setting
+        self.train_opts['asynchronous_update_choose_errmax'] = False
         self.train_opts['use_err_log'] = False
         self.train_opts['err_log_scaler'] = 0.1
         self.train_opts['err_log_max'] = 1   # clipping
@@ -5803,18 +5859,18 @@ class GscNet():
         self.train_opts['pseudocount'] = 1e-15
         self.train_opts['epsilon'] = 1e-15
         self.train_opts['trace_varnames'] = [
-            'kl_trees', 
-            'kl_treelets', 
+            'kl_trees',
+            'kl_treelets',
             'kl_binding_pairs',
-            'kl_bindings', 
-            'xent_trees', 
-            'xent_treelets', 
+            'kl_bindings',
+            'xent_trees',
+            'xent_treelets',
             'xent_binding_pairs',
-            'xent_bindings', 
+            'xent_bindings',
             # 'xent_terminal_bindings',
-            'prob_sent', 
-            'acc', 
-            'WC', 
+            'prob_sent',
+            'acc',
+            'WC',
             # 'bC',
             'estr',
             # 'qpolicy',
@@ -5830,12 +5886,13 @@ class GscNet():
         # NOTE: normalize coef
         self.train_opts['coef'] = coef
         self.train_opts['bias1_only'] = False
-        self.train_opts['bias_only'] = False   # if coef['treelets'] > 0, 
+        self.train_opts['bias_only'] = False   # if coef['treelets'] > 0,
         self.train_opts['update_estr'] = True
         self.train_opts['update_bowl_strength'] = True
         self.train_opts['ep_method'] = ['newton', 'integration'][1]
         self.train_opts['use_actval'] = False
-        self.train_opts['dur'] = self.opts['q_max'] / self.opts['q_rate']  # 15. 
+        # 15.
+        self.train_opts['dur'] = self.opts['q_max'] / self.opts['q_rate']
         self.train_opts['init_noise_mag'] = 0.02
         self.train_opts['update_w'] = True
         self.train_opts['coef_q'] = 0.
@@ -5846,12 +5903,12 @@ class GscNet():
         self.train_opts['average_weight'] = False
         self.train_opts['average_filler_bias'] = False
         self.train_opts['optimizer'] = ['sgd', 'adam'][0]
-        
+
         self.train_opts['mask0'] = self.get_mask0()
 
         # mask_bias
-        # NOTE: Harmony values of illegitimate bindings are assumed to be 
-        # smaller than or equal to -4. 
+        # NOTE: Harmony values of illegitimate bindings are assumed to be
+        # smaller than or equal to -4.
         # idx_mask_bias1 = np.diag(self.bC) <= -4.
         # mask_avg_bias1 = np.ones(self.num_bindings)
         # mask_avg_bias1[idx_mask_bias1] = np.nan
@@ -5871,7 +5928,7 @@ class GscNet():
             self.traces_train = {}
             for key in self.train_opts['trace_varnames']:
                 self.traces_train[key] = []
-        
+
         if self.train_opts['optimizer'] == 'adam':
             self.optim = {}
             self.optim['M_WC'] = np.zeros_like(self.WC)
@@ -5886,7 +5943,8 @@ class GscNet():
 
         if self.train_opts['update_gram_only']:
             mask0 = abs(np.sign(self.WC))
-            np.fill_diagonal(mask0, 1)     # allow the udpate of second-order bias of every binding
+            # allow the udpate of second-order bias of every binding
+            np.fill_diagonal(mask0, 1)
         else:
             rnames_terminal = self.hg.roles.get_terminals()
             idx_terminal = self.find_roles(rnames_terminal)
@@ -5921,8 +5979,8 @@ class GscNet():
         for key in self.train_opts['trace_varnames']:
             self.traces_train[key] = []
 
-    def train2(self, prefix_list=None, prefix_weights=None, 
-            train_opts=None, savefilename=None, log_ema_stat=True):
+    def train2(self, prefix_list=None, prefix_weights=None,
+               train_opts=None, savefilename=None, log_ema_stat=True):
 
         if hasattr(self, 'traces_train'):
             for key, val in self.traces_train.items():
@@ -5938,7 +5996,7 @@ class GscNet():
         if prefix_weights is None:
             prefix_weights = np.ones(len(prefix_list))
             prefix_weights /= prefix_weights.sum()
-        
+
         maxlen_prefix = 0
         for prefix in prefix_list:
             maxlen_prefix = max(maxlen_prefix, len(prefix))
@@ -5946,7 +6004,7 @@ class GscNet():
         for _ in range(self.train_opts['num_epochs']):
 
             self.epoch_num += 1
-            
+
             # mask = net.params_backup['WC'].astype(bool).astype(float)
             mask = np.ones(self.WC.shape)
             dWC = np.zeros(self.WC.shape)
@@ -5974,7 +6032,7 @@ class GscNet():
                 dbC += dbC_parse
 
             for pi, prefix in enumerate(prefix_list):
-                
+
                 if prefix_weights[pi] > 0:
 
                     if len(prefix) > 0:
@@ -5985,13 +6043,15 @@ class GscNet():
                         scale_dWC = 1.0
                         prefix_bnames = []
 
-                    stat_P = self.get_corpus_stat(self.subset_corpus(prefix_bnames))
+                    stat_P = self.get_corpus_stat(
+                        self.subset_corpus(prefix_bnames))
                     stat_Q, actC_set = self.estimate_prob_inc(
                         prefix=prefix, num_trials=self.train_opts['num_trials'])
 
                     if self.train_opts['ema_stat_weight'] > 0:
                         if hasattr(self, 'stat_Q_prev'):
-                            stat_Q_new = self.ema_stat(stat_new=stat_Q, stat_old=self.stat_Q_prev, weight=None)
+                            stat_Q_new = self.ema_stat(
+                                stat_new=stat_Q, stat_old=self.stat_Q_prev, weight=None)
                         else:
                             stat_Q_new = stat_Q
                     else:
@@ -5999,12 +6059,14 @@ class GscNet():
 
                     self.clear_input()
                     if len(prefix_bnames) > 0:
-                        prefix_bnames = prefix_bnames[-1]  # currently, one word at a time
+                        # currently, one word at a time
+                        prefix_bnames = prefix_bnames[-1]
                         self.set_input(prefix_bnames)
                     extC_token = self.extC.astype(bool).astype(int)
 
-                    kl_curr, xent_curr, err, err_log = self.cost(stat_P, stat_Q_new)
-                    self.stat_Q_prev = stat_Q_new  # 
+                    kl_curr, xent_curr, err, err_log = self.cost(
+                        stat_P, stat_Q_new)
+                    self.stat_Q_prev = stat_Q_new  #
 
                     if self.train_opts['use_err_avg']:
                         err_avg = {}
@@ -6012,21 +6074,26 @@ class GscNet():
                             err_avg[key1] = {}
                             if isinstance(err[key1], dict):
                                 for key2, _ in err[key1].items():
-                                    err_avg[key1][key2] = (err[key1][key2] + err_log[key1][key2])/2
+                                    err_avg[key1][key2] = (
+                                        err[key1][key2] + err_log[key1][key2])/2
                             else:
                                 err_avg[key1] = (err[key1] + err_log[key1])/2
-                        dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(err_avg, extC_token)
+                        dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(
+                            err_avg, extC_token)
                     elif self.train_opts['use_err_log']:
-                        dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(err_log, extC_token)
+                        dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(
+                            err_log, extC_token)
                     else:
-                        dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(err, extC_token)
+                        dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(
+                            err, extC_token)
 
                     dWC += dWC_curr * scale_dWC * prefix_weights[pi]
                     dbC += dbC_curr * scale_dWC * prefix_weights[pi]
                     if len(prefix) > 0:
                         destr += destr_curr * prefix_weights[pi]
                         if self.train_opts['coef_q'] > 0:
-                            dqpolicy[len(prefix)] += dq_curr * prefix_weights[pi]
+                            dqpolicy[len(prefix)] += dq_curr * \
+                                prefix_weights[pi]
                     for key in xent:
                         xent[key] += xent_curr[key]
                     for key in kl:
@@ -6059,28 +6126,34 @@ class GscNet():
                         for key, val in err['treelets'].items():
                             if key[0] in idx:
                                 temp[ri] += abs(val)
-                                
+
                         if self.hg.roles.is_terminal(rname):
                             for key, val in err['bindings'].items():
                                 if key in idx:
                                     temp[ri] += abs(val)
-                            
-                    rid_candidates = np.argwhere(temp == np.amax(temp)).flatten()
-                    role_idx_list = np.random.choice(rid_candidates, self.num_treelets_update, replace=False)
+
+                    rid_candidates = np.argwhere(
+                        temp == np.amax(temp)).flatten()
+                    role_idx_list = np.random.choice(
+                        rid_candidates, self.num_treelets_update, replace=False)
 
                 else:
-                    role_idx_list = np.random.choice(self.num_roles, self.num_treelets_update, replace=False)
+                    role_idx_list = np.random.choice(
+                        self.num_roles, self.num_treelets_update, replace=False)
 
                 maskbC_update = np.zeros(self.num_bindings)
                 rnames = [self.role_names[rid] for rid in role_idx_list]
                 idx = self.find_roles(rnames)
                 maskbC_update[idx] = 1.
 
-                maskWC_update = np.zeros((self.num_bindings, self.num_bindings))
+                maskWC_update = np.zeros(
+                    (self.num_bindings, self.num_bindings))
                 treelet_list = []
                 for rid in role_idx_list:
-                    r_daughters = self.hg.roles.get_daughters(self.role_names[rid])
-                    treelet_list.append([self.role_names[rid]] + r_daughters['l'] + r_daughters['r'])
+                    r_daughters = self.hg.roles.get_daughters(
+                        self.role_names[rid])
+                    treelet_list.append(
+                        [self.role_names[rid]] + r_daughters['l'] + r_daughters['r'])
 
                 for treelet in treelet_list:
                     idx = self.find_roles(treelet)
@@ -6088,32 +6161,42 @@ class GscNet():
             else:
                 maskWC_update = np.ones((self.num_bindings, self.num_bindings))
                 maskbC_update = np.ones(self.num_bindings)
-                    
+
             if self.train_opts['update_w']:
                 # print('epoch num=', epi, destr)
 
                 # TODO: Add the weight decay term to different settings
-                #     : Currently, the term was added only to the default setting case 
+                #     : Currently, the term was added only to the default setting case
                 if ('weight_decay' in self.train_opts) and self.train_opts['weight_decay']:
-                        if self.train_opts['weight_decay_to'] == 'default':
-                            ref = self.params_backup['WC']
-                        else:
-                            ref = self.average_weight2()
-                        weight_decay = -self.train_opts['weight_decay_factor'] * (self.WC - ref)
+                    if self.train_opts['weight_decay_to'] == 'default':
+                        ref = self.params_backup['WC']
+                    else:
+                        ref = self.average_weight2()
+                    weight_decay = - \
+                        self.train_opts['weight_decay_factor'] * \
+                        (self.WC - ref)
                 else:
                     weight_decay = np.zeros(self.WC.shape)
 
                 if not (('bias2_only' in self.train_opts) and self.train_opts['bias2_only']):
                     if self.train_opts['optimizer'] == 'adam':
                         # TODO: Add the weight decay term
-                        self.optim['M_WC'] = self.optim['beta1'] * self.optim['M_WC'] + (1. - self.optim['beta1']) * dWC
-                        self.optim['R_WC'] = self.optim['beta2'] * self.optim['R_WC'] + (1. - self.optim['beta2']) * dWC**2
-                        m_k_hat_WC = self.optim['M_WC'] / (1. - self.optim['beta1']**self.epoch_num)
-                        r_k_hat_WC = self.optim['R_WC'] / (1. - self.optim['beta2']**self.epoch_num)
-                        self.WC += self.train_opts['lrate'] * m_k_hat_WC / (np.sqrt(r_k_hat_WC) + self.optim['eps'])
+                        self.optim['M_WC'] = self.optim['beta1'] * \
+                            self.optim['M_WC'] + \
+                            (1. - self.optim['beta1']) * dWC
+                        self.optim['R_WC'] = self.optim['beta2'] * \
+                            self.optim['R_WC'] + \
+                            (1. - self.optim['beta2']) * dWC**2
+                        m_k_hat_WC = self.optim['M_WC'] / \
+                            (1. - self.optim['beta1']**self.epoch_num)
+                        r_k_hat_WC = self.optim['R_WC'] / \
+                            (1. - self.optim['beta2']**self.epoch_num)
+                        self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
+                            (np.sqrt(r_k_hat_WC) + self.optim['eps'])
                         self._set_weights()
                     else:
-                        self.WC += self.train_opts['lrate'] * (dWC + weight_decay) * maskWC_update
+                        self.WC += self.train_opts['lrate'] * \
+                            (dWC + weight_decay) * maskWC_update
                         self._set_weights()
 
                 if self.train_opts['bias1_only']:
@@ -6122,30 +6205,40 @@ class GscNet():
 
                 if not self.opts['use_second_order_bias']:
                     if self.train_opts['optimizer'] == 'adam':
-                        self.optim['M_bC'] = self.optim['beta1'] * self.optim['M_bC'] + (1. - self.optim['beta1']) * dbC
-                        self.optim['R_bC'] = self.optim['beta2'] * self.optim['R_bC'] + (1. - self.optim['beta2']) * dbC**2
-                        m_k_hat_bC = self.optim['M_bC'] / (1. - self.optim['beta1']**self.epoch_num)
-                        r_k_hat_bC = self.optim['R_bC'] / (1. - self.optim['beta2']**self.epoch_num)
-                        self.bC += self.train_opts['lrate'] * m_k_hat_bC / (np.sqrt(r_k_hat_bC) + self.optim['eps'])
+                        self.optim['M_bC'] = self.optim['beta1'] * \
+                            self.optim['M_bC'] + \
+                            (1. - self.optim['beta1']) * dbC
+                        self.optim['R_bC'] = self.optim['beta2'] * \
+                            self.optim['R_bC'] + \
+                            (1. - self.optim['beta2']) * dbC**2
+                        m_k_hat_bC = self.optim['M_bC'] / \
+                            (1. - self.optim['beta1']**self.epoch_num)
+                        r_k_hat_bC = self.optim['R_bC'] / \
+                            (1. - self.optim['beta2']**self.epoch_num)
+                        self.bC += self.train_opts['lrate'] * m_k_hat_bC / \
+                            (np.sqrt(r_k_hat_bC) + self.optim['eps'])
                         self._set_biases()
                     else:
-                        self.bC += self.train_opts['lrate'] * dbC * maskbC_update # update
+                        # update
+                        self.bC += self.train_opts['lrate'] * \
+                            dbC * maskbC_update
                         self._set_biases()
-                
+
                 if self.train_opts['update_estr']:
                     self.estr += self.train_opts['lrate'] * destr
-                    
+
                 if self.train_opts['average_weight']:
                     self.average_weight()
 
                 if self.train_opts['average_filler_bias']:
                     self.average_filler_bias()
-                
+
                 if self.train_opts['update_bowl_strength']:
                     self.update_bowl_strength()
 
                 if self.train_opts['coef_q'] > 0.:
-                    qpolicy = self.qpolicy + self.train_opts['lrate'] * dqpolicy
+                    qpolicy = self.qpolicy + \
+                        self.train_opts['lrate'] * dqpolicy
                     for ii in range(1, len(self.qpolicy)):
                         qpolicy[ii] = max(qpolicy[ii], self.qpolicy[ii - 1])
                     self.qpolicy = qpolicy
@@ -6216,7 +6309,7 @@ class GscNet():
                     self.nonzero_all0 = True
                     self.train_opts['lrate'] *= 0.1
                 if (not self.nonzero_all1) and np.all(self.traces_train['prob_sent'][-1] > 0):
-                    # At the last iteration, every parse tree was generated. 
+                    # At the last iteration, every parse tree was generated.
                     self.nonzero_all1 = True
                     self.train_opts['num_trials'] *= 2
 
@@ -6227,7 +6320,6 @@ class GscNet():
 
         if savefilename is not None:
             save_model(self, savefilename)
-
 
     def test(self, num_trials=10):
 
@@ -6263,10 +6355,11 @@ class GscNet():
                     sent_acc += 1.
                 else:
                     test_res[ti, si] = 0.
-                    
+
             sent = ' '.join([bname.split('/')[0] for bname in sent])
 
-            print('Sentence {:d} ACC = {:.3f} ({:s})'.format(si, sent_acc/num_trials, sent))
+            print('Sentence {:d} ACC = {:.3f} ({:s})'.format(
+                si, sent_acc/num_trials, sent))
 
 
 def save_model(net, filename):
@@ -6286,11 +6379,14 @@ def smooth(scalars, weight):  # Weight between 0 and 1
     last = scalars[0]  # First value in the plot (first timestep)
     smoothed = list()
     for point in scalars:
-        smoothed_val = last * weight + (1 - weight) * point  # Calculate smoothed value
+        smoothed_val = last * weight + \
+            (1 - weight) * point  # Calculate smoothed value
         smoothed.append(smoothed_val)                        # Save it
-        last = smoothed_val                                  # Anchor the last smoothed value
+        # Anchor the last smoothed value
+        last = smoothed_val
 
     return np.array(smoothed)
+
 
 def maxeig(mat):
     eigvals, eigvecs = np.linalg.eigh(mat)
@@ -6619,7 +6715,7 @@ def dot_products(dp_mat, dim, max_iter=100000, seed=None, tol=1e-6):
 
 
 def find_nearest_vector(array, value):
-    idx = np.array([np.linalg.norm(x+y) for (x,y) in array-value]).argmin()
+    idx = np.array([np.linalg.norm(x+y) for (x, y) in array-value]).argmin()
     return array[idx]
 
 
@@ -6644,8 +6740,8 @@ def compute_dist(net, ref_points, metric=['euclidean', 'cos', 'dp'][0]):
             dist[:, pi] = dp / (mag1 * mag2)
 
     return dist
-    
-    
+
+
 # Zipf distribution
 def zipf(N, s=1):
     res = np.zeros(N)
@@ -6654,10 +6750,11 @@ def zipf(N, s=1):
     return res / res.sum()
 
 
-def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0., 1.], 
-    linewidth=1, legend=True, savefilename_prefix=None, log_y=False):
+def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0., 1.],
+                      linewidth=1, legend=True, savefilename_prefix=None, log_y=False):
 
-    nsent_per_iteration = net.train_opts['num_trials'] + net.train_opts['parallel_parser_num_trials']
+    nsent_per_iteration = net.train_opts['num_trials'] + \
+        net.train_opts['parallel_parser_num_trials']
 
     # Plot KL divergence
     xval = np.arange(
@@ -6675,10 +6772,11 @@ def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0
     if savefilename_prefix is not None:
         plt.savefig(savefilename_prefix + '-kl.pdf')
     plt.show()
-    
+
     # Plot accuracy
     xval = np.arange(len(net.traces_train['acc'])) * nsent_per_iteration
-    plt.plot(xval, smooth(net.traces_train['acc'], weight=weight), linewidth=linewidth)
+    plt.plot(xval, smooth(
+        net.traces_train['acc'], weight=weight), linewidth=linewidth)
     plt.ylim(0, 1)
     plt.xlabel('# of sentences', fontsize=15)
     plt.ylabel('Production accuracy', fontsize=15)
@@ -6691,29 +6789,30 @@ def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0
     if savefilename_prefix is not None:
         plt.savefig(savefilename_prefix + '-acc.pdf')
     plt.show()
-    
+
     if savefilename_prefix is None:
         savefilename = None
     else:
         savefilename = savefilename_prefix + '-prob.pdf'
-    plot_prob_trees_trace(net, weight=weight, normalize=normalize, 
-        savefilename=savefilename, linewidth=linewidth, legend=legend, log_y=log_y)
+    plot_prob_trees_trace(net, weight=weight, normalize=normalize,
+                          savefilename=savefilename, linewidth=linewidth, legend=legend, log_y=log_y)
 
 
 def plot_prob_trees_trace(
-    net, normalize=False, weight=0., 
-    xunit=[None, 'num_trials'][1], savefilename=None, 
-    legend=True, linewidth=1, log_y=False):
-    
-    nsent_per_iteration = net.train_opts['num_trials'] + net.train_opts['parallel_parser_num_trials']
+        net, normalize=False, weight=0.,
+        xunit=[None, 'num_trials'][1], savefilename=None,
+        legend=True, linewidth=1, log_y=False):
+
+    nsent_per_iteration = net.train_opts['num_trials'] + \
+        net.train_opts['parallel_parser_num_trials']
 
     sent0 = []
     for sent in net.corpus['sentence']:
         sent0.append(' '.join([bname.split('/')[0] for bname in sent]))
-        
+
     ptarg = net.corpus['prob_sent']
     yy = net.traces_train['prob_sent']
-        
+
     if xunit is None:
         xx = np.arange(len(yy))
         xlab = '# of updates'
@@ -6721,10 +6820,10 @@ def plot_prob_trees_trace(
         # It is assumed that num_trials was fixed over the course of training
         xx = np.arange(len(yy)) * nsent_per_iteration
         xlab = '# of sentences'
-    
+
     if normalize:
         acc = net.traces_train['acc']  # 2d-array
-        #first_nonzero = np.where(net.traces_train['acc'] > 0)[0][0]
+        # first_nonzero = np.where(net.traces_train['acc'] > 0)[0][0]
         yy = yy / (acc + 1e-15)  # prevent zero division
 
     yy = smooth(yy, weight)
@@ -6738,8 +6837,8 @@ def plot_prob_trees_trace(
         else:
             yy1 = ptarg[si]
         plt.axhline(yy1, linestyle='--', c='C%d' % (si % 10))
-        plt.plot(xx, yy[:, si], # / yy.sum(axis=1),
-                 label=sent0[si], color='C%d'%(si % 10), linewidth=linewidth)
+        plt.plot(xx, yy[:, si],  # / yy.sum(axis=1),
+                 label=sent0[si], color='C%d' % (si % 10), linewidth=linewidth)
 
     ylab = 'Sentence probability'
     if log_y:
@@ -6770,7 +6869,7 @@ def parse(net, estr=2, slen=None, apply_time_constant=False, null1=False,
         min_slen = slen
         max_slen = slen
     net.estr = np.ones(net.num_bindings) * estr
-    
+
     if trained_only:
         n_sent = len(net.corpus['sentence'])
         if uniform:
@@ -6783,7 +6882,7 @@ def parse(net, estr=2, slen=None, apply_time_constant=False, null1=False,
         else:
             print('CHECK')
             f_empty_type = net.hg.g.opts['null']
-            
+
         idx = np.random.choice(n_sent, 1, replace=True, p=p)
         sent = net.corpus['sentence'][idx[0]]
         targ = net.corpus['target'][idx[0]]
@@ -6792,16 +6891,17 @@ def parse(net, estr=2, slen=None, apply_time_constant=False, null1=False,
     else:
         sent, targ, p = net.generate_sentence(
             add_null_input=True, min_sent_len=min_slen, max_sent_len=max_slen)
-        
+
     if null1:
         sent = sent[:min_slen+1]
-    print('Input sentence =', ' '.join([bname.split('/')[0] for bname in sent]))
+    print('Input sentence =', ' '.join(
+        [bname.split('/')[0] for bname in sent]))
     net.reset(net.ep, 0.02)
-    
+
     if apply_time_constant:
         net.opts['scale_type'] = 'lv'
         net.opts['scaling_factor'] = 0.1
-        net.update_scale_constants(pos=1, lv=1)    
+        net.update_scale_constants(pos=1, lv=1)
 
     net.set_input(sent)
     net.runC(15)
@@ -6817,34 +6917,36 @@ def parse(net, estr=2, slen=None, apply_time_constant=False, null1=False,
         print('Correct')
     else:
         print('False')
-        
+
     return net
 
 
-def parse2(net, dq, num_trials=1, estr=2, estr_null=1, slen=None, 
-    decay_factor=0., scaling_factor=2, scaling_symmetric=False,
-    null_input_extend_pos=True, null_input_extend_lv=True, plot_tree=False):
-    
-    #dq = np.array([0.5, 0.5, 0.5, 0.5, 1, 1, 1, 1, 1])
-    
+def parse2(net, dq, num_trials=1, estr=2, estr_null=1, slen=None,
+           decay_factor=0., scaling_factor=2, scaling_symmetric=False,
+           null_input_extend_pos=True, null_input_extend_lv=True, plot_tree=False):
+
+    # dq = np.array([0.5, 0.5, 0.5, 0.5, 1, 1, 1, 1, 1])
+
     if slen is None:
         min_slen = 1
         max_slen = net.hg.opts['max_sent_len']
     else:
         min_slen = slen
         max_slen = slen
-    sent, targ, p = net.generate_sentence(add_null_input=False, min_sent_len=min_slen, max_sent_len=max_slen)
-        
+    sent, targ, p = net.generate_sentence(
+        add_null_input=False, min_sent_len=min_slen, max_sent_len=max_slen)
+
     net.estr = np.ones(net.num_bindings) * estr
     net.opts['scale_type'] = 'pos'
     net.opts['scaling_factor'] = scaling_factor
-        
-    print('Input sentence =', ' '.join([bname.split('/')[0] for bname in sent]))
+
+    print('Input sentence =', ' '.join(
+        [bname.split('/')[0] for bname in sent]))
 
     for ti in range(num_trials):
 
         net.reset(net.ep, 0.02)
-        
+
         for bi, bname in enumerate(sent):
             net.update_scale_constants(bi + 1, symmetric=scaling_symmetric)
             net.extC *= decay_factor
@@ -6852,12 +6954,12 @@ def parse2(net, dq, num_trials=1, estr=2, estr_null=1, slen=None,
             # print(bname)
             net.runC(dq[bi])
             # net.plot_tree2(scale=1.5)
-        
+
         # null_input = ['@/(1,{})'.format(ii) for ii in range(len(sent) + 1, net.hg.opts['max_sent_len'] + 1)]
         # net.update_scale_constants(pos=0)
         # net.set_input(null_input)
-        set_null_input(net, estr=estr_null, pos=len(sent) + 1, 
-            extend_pos=null_input_extend_pos, extend_lv=null_input_extend_lv)
+        set_null_input(net, estr=estr_null, pos=len(sent) + 1,
+                       extend_pos=null_input_extend_pos, extend_lv=null_input_extend_lv)
         net.update_scale_constants(pos=0)
         net.runC(net.opts['q_max'] - net.q[0])
 
@@ -6881,24 +6983,24 @@ def convert_sentence(sent, term2word):
             fnames = term2word[fname]
         else:
             print("Can't find {} in `term2word`".format(fname))
-            
+
         bnames = [fname + '/' + rname for fname in fnames]
         sent0.append(bnames)
-        
-    return sent0
-    
 
-def test_parse_inc(net, dq, num_sent=None, num_trials=10, 
-    estr=2, estr_null=2, term2word=None,
-    symmetric=False,
-    decay_factor=0.5, scaling_factor=2,
-    update_q_mask=True,
-    update_scale_constants=False,
-    use_multiple_timescale=False, 
-    wrapup_clear_input=False,
-    null_input_extend_pos=True,
-    null_input_extend_lv=True, disp=False):
-    
+    return sent0
+
+
+def test_parse_inc(net, dq, num_sent=None, num_trials=10,
+                   estr=2, estr_null=2, term2word=None,
+                   symmetric=False,
+                   decay_factor=0.5, scaling_factor=2,
+                   update_q_mask=True,
+                   update_scale_constants=False,
+                   use_multiple_timescale=False,
+                   wrapup_clear_input=False,
+                   null_input_extend_pos=True,
+                   null_input_extend_lv=True, disp=False):
+
     if num_sent is None:
         num_sent = len(net.corpus['sentence'])
     else:
@@ -6933,11 +7035,11 @@ def test_parse_inc(net, dq, num_sent=None, num_trials=10,
 
         for ti in range(num_trials):
             net.run_sent(
-                sent0, decay_factor=decay_factor, 
+                sent0, decay_factor=decay_factor,
                 symmetric=symmetric,
                 update_q_mask=update_q_mask,
                 update_scale_constants=update_scale_constants,
-                use_multiple_timescale=use_multiple_timescale, 
+                use_multiple_timescale=use_multiple_timescale,
                 wrapup_clear_input=wrapup_clear_input,
                 null_input_extend_pos=null_input_extend_pos,
                 null_input_extend_lv=null_input_extend_lv, disp=disp)
@@ -6952,7 +7054,8 @@ def test_parse_inc(net, dq, num_sent=None, num_trials=10,
         res[si]['parse_incorr'] = np.array(res[si]['parse_incorr'])
 
         sent = ' '.join([bname.split('/')[0] for bname in sent])
-        print('Sentence {:d} ACC = {:.3f} ({:s})'.format(si, res[si]['acc'], sent))
+        print('Sentence {:d} ACC = {:.3f} ({:s})'.format(
+            si, res[si]['acc'], sent))
 
     return res
 
@@ -6962,13 +7065,13 @@ def get_weight_matrix(net, rname1, rname2):
     bid1 = net.find_roles(rname1)
     bid2 = net.find_roles(rname2)
     return net.WC[np.ix_(bid2, bid1)]
-    
+
 
 def plot_weight_matrix(net, rname1, rname2):
     # from rname1 to rname2
     WC = get_weight_matrix(net, rname1, rname2)
     heatmap(WC,
-            xticklabels=net.filler_names, 
+            xticklabels=net.filler_names,
             yticklabels=net.filler_names,
             xlabel=rname1,
             ylabel=rname2,
@@ -6979,7 +7082,7 @@ def plot_bias(net):
     if net.opts['use_second_order_bias']:
         bCmat = net.vec2mat(np.diag(net.WC))
         heatmap(bCmat,
-                xticklabels=net.role_names, 
+                xticklabels=net.role_names,
                 yticklabels=net.filler_names,
                 xlabel='Roles',
                 ylabel='Fillers',
@@ -6991,49 +7094,52 @@ def report_stat(net, decimals=3):
         if 'prob_sent' in net.traces_train:
             for si, sent in enumerate(net.corpus['sentence']):
                 sent = [bname.split('/')[0] for bname in sent]
-                pval = '{0:.{1}f}'.format(net.corpus['prob_sent'][si], decimals)
-                qval = '{0:.{1}f}'.format(net.traces_train['prob_sent'][-1, si], decimals)
+                pval = '{0:.{1}f}'.format(
+                    net.corpus['prob_sent'][si], decimals)
+                qval = '{0:.{1}f}'.format(
+                    net.traces_train['prob_sent'][-1, si], decimals)
                 print('Sentence {:d}: p = {}, q = {} ({})'.format(
                     si + 1, pval, qval, ' '.join(sent)))
 
 
 def report_train_result(net, num_epochs=100, report_nsent=7, decimals=4):
-    
+
     print('Number of fillers = {}'.format(net.num_fillers))
     print('Number of roles = {}'.format(net.num_roles))
     print('Number of bindings = {}'.format(net.num_bindings))
 
     print('Maximum sentence length = {}'.format(net.hg.opts['max_sent_len']))
     print('Number of sentences = {}'.format(len(net.corpus['sentence'])))
-    
+
     print('beta (bowl strength) = {:.3f}'.format(net.opts['bowl_strength']))
     print('m (competition strength) = {:.3f}'.format(net.opts['m']))
     print('dt = {}'.format(net.opts['dt_init']))
     print('dq/dt = {}'.format(net.opts['q_rate']))
     print('T = {:.3f}'.format(net.opts['T_init']))
-       
+
     print('KL: M = {:.3f}, SD = {:.3f}'.format(
         net.traces_train['kl_trees'][-num_epochs:].mean(),
         net.traces_train['kl_trees'][-num_epochs:].std()))
     print('ACC: M = {:.3f}, SD = {:.3f}'.format(
         net.traces_train['acc'][-num_epochs:].mean(),
         net.traces_train['acc'][-num_epochs:].std()))
-    
+
     num_sent = min(report_nsent, len(net.corpus['sentence']))
     for si in range(num_sent):
         sent = net.corpus['sentence'][si]
         sent = [bname.split('/')[0] for bname in sent]
         pval = '{0:.{1}f}'.format(net.corpus['prob_sent'][si], decimals)
-        qval = '{0:.{1}f}'.format(net.traces_train['prob_sent'][-num_epochs:, si].mean(axis=0), decimals)
+        qval = '{0:.{1}f}'.format(
+            net.traces_train['prob_sent'][-num_epochs:, si].mean(axis=0), decimals)
         print('Sentence {:d}: p = {}, q = {} ({})'.format(
             si + 1, pval, qval, ' '.join(sent)))
 
 
 def compare_models(
-    net_list, ylim_kl=None, ylim_acc=[0., 1.], weight_kl=0.,
-    weight_acc=0., weight_prob_sent=0., normalize=False, net_labs=None):
+        net_list, ylim_kl=None, ylim_acc=[0., 1.], weight_kl=0.,
+        weight_acc=0., weight_prob_sent=0., normalize=False, net_labs=None):
     # Temporary
-    
+
     if net_labs is not None:
         assert len(net_labs) == len(net_list)
     else:
@@ -7041,8 +7147,10 @@ def compare_models(
 
     # KL divergence
     for neti, net in enumerate(net_list):
-        nsent_per_iteration = net.train_opts['num_trials'] + net.train_opts['parallel_parser_num_trials']
-        xval = np.arange(len(net.traces_train['kl_trees'])) * nsent_per_iteration
+        nsent_per_iteration = net.train_opts['num_trials'] + \
+            net.train_opts['parallel_parser_num_trials']
+        xval = np.arange(
+            len(net.traces_train['kl_trees'])) * nsent_per_iteration
         plt.plot(xval, smooth(net.traces_train['kl_trees'], weight_kl),
                  label=net_labs[neti])
     plt.grid()
@@ -7052,13 +7160,14 @@ def compare_models(
     if ylim_kl is not None:
         plt.ylim(ylim_kl[0], ylim_kl[1])
     plt.show()
-    
+
     # accuracy
     xval = np.arange(len(net.traces_train['acc'])) * nsent_per_iteration
     for neti, net in enumerate(net_list):
-        nsent_per_iteration = net.train_opts['num_trials'] + net.train_opts['parallel_parser_num_trials']
+        nsent_per_iteration = net.train_opts['num_trials'] + \
+            net.train_opts['parallel_parser_num_trials']
         xval = np.arange(len(net.traces_train['acc'])) * nsent_per_iteration
-        plt.plot(xval ,smooth(net.traces_train['acc'], weight=weight_acc),
+        plt.plot(xval, smooth(net.traces_train['acc'], weight=weight_acc),
                  label=net_labs[neti])
     plt.ylim(ylim_acc[0], ylim_acc[1])
     plt.ylabel('Accuracy', fontsize=15)
@@ -7069,21 +7178,22 @@ def compare_models(
 
     for neti, net in enumerate(net_list):
         plt.title(net_labs[neti])
-        plot_prob_trees_trace(net, normalize=normalize, weight=weight_prob_sent)
+        plot_prob_trees_trace(net, normalize=normalize,
+                              weight=weight_prob_sent)
         plt.show()
 
         for si, sent in enumerate(net.corpus['sentence']):
             sent = [bname.split('/')[0] for bname in sent]
             print('Sentence {:d}: p = {:.3f}, q = {:.3f} ({})'.format(
                 si + 1,
-                net.corpus['prob_sent'][si], 
+                net.corpus['prob_sent'][si],
                 net.traces_train['prob_sent'][-1, si],
                 ' '.join(sent)))
 
 
 def set_null_input(
-    net, pos, estr=1, extend_pos=False, extend_lv=False,
-    cumulative=False):  #, use_type=False):
+        net, pos, estr=1, extend_pos=False, extend_lv=False,
+        cumulative=False):  # , use_type=False):
 
     if extend_lv:
         lv = range(1, net.hg.opts['max_sent_len'] + 1)
@@ -7133,19 +7243,19 @@ def train_inc_parser(net, num_trials, lrate=0.1):
         net.traces_train['acc_inc'] = []
     else:
         net.traces_train['acc_inc'] = list(net.traces_train['acc_inc'])
-    
+
     for ti in range(num_trials):
         pos_wrong = -1
         sent, targ, p = net.generate_sentence(add_null_input=False)
         net.run_sent(sent, disp=False)
         gp = net.read_grid_point(disp=False)
-        
+
         net.set_discrete_state(gp)
         if np.allclose(net.actC, targ):
             acc.append(1.)
         else:
             acc.append(0.)
-        
+
         for bi, bname in enumerate(sent):
             ftype1 = bname.split(bsep)[0]  # ignore tokens
             fname2 = gp[bi].split(bsep)[0]
@@ -7154,11 +7264,11 @@ def train_inc_parser(net, num_trials, lrate=0.1):
                 # print(ftype1, ftype2)
                 pos_wrong = bi
                 break
-                
+
         if pos_wrong >= 0:
-#             print('FOUND')
-#             print(sent, bi + 1, ftype1, ftype2)
-#             for ii in range(pos_wrong, max_slen):
+            #             print('FOUND')
+            #             print(sent, bi + 1, ftype1, ftype2)
+            #             for ii in range(pos_wrong, max_slen):
 
             net.qpolicy[:pos_wrong + 1] -= 0.01 * \
                 np.arange(pos_wrong + 1)/(pos_wrong + 1) * lrate  # previous
@@ -7180,14 +7290,14 @@ def train_inc_parser(net, num_trials, lrate=0.1):
                     net.qpolicy[ii] = 0
                 if net.qpolicy[ii] >= net.opts['q_max']:
                     net.qpolicy[ii] = net.opts['q_max']
-            
+
             net.qpolicy[0] = 0.
 
             print(ti, net.qpolicy)
         else:
             pass
             # net.qpolicy += 0.001 * np.arange(len(net.qpolicy)) * lrate
-            
+
         # net.qpolicy[0] = max(min(0, net.qpolicy[0]), 0)
 #         for ii in range(1, len(net.qpolicy)):
 # #             print(-ii, -ii-1)
@@ -7198,13 +7308,12 @@ def train_inc_parser(net, num_trials, lrate=0.1):
 #             if net.qpolicy[ii-1] >= net.qpolicy[ii]:
 #                 net.qpolicy[ii] = net.qpolicy[ii-1]
         # print(net.qpolicy)
-        
+
     acc = np.array(acc)
     print('ACC = {:.3f}'.format(acc.mean()))
     # acc = acc.cumsum() / np.ones(num_trials).cumsum()
     net.traces_train['acc_inc'] += list(acc)
     net.traces_train['acc_inc'] = np.array(net.traces_train['acc_inc'])
-
 
 
 def compute_metric(net, actC_trace, treelet):
@@ -7215,10 +7324,10 @@ def compute_metric(net, actC_trace, treelet):
     roles = []
     for bname in treelet:
         roles.append(bname.split('/')[1])
-        
+
     idx = net.find_bindings(treelet)
     dp = actC_trace[:, idx].sum(axis=1) / len(roles)
-    
+
     return dp
 
 
@@ -7230,46 +7339,46 @@ def get_treelet_frame(net, rname):
 
 def get_treelets(net, rules, rname):
     '''Return all grammatical treelets at the position `rname`'''
-    
+
     roleset = get_treelet_frame(net, rname)
     treelets = []
-    
+
     for rule in rules:
-        
+
         treelet = []
-        
+
         if rule['d1'] is not None:
             treelet.append(rule['d1'] + '/' + roleset[0])
-            
+
         if rule['d2'] is not None:
             treelet.append(rule['d2'] + '/' + roleset[1])
-        
+
         treelet.append(rule['m'] + '/' + roleset[2])
         treelets.append(treelet)
-        
+
     return treelets
 
 
 def compute_treelet_act_trace(net, actC_trace, rules, rname):
-#     rules = net.hg.g.get_rules()
+    #     rules = net.hg.g.get_rules()
     treeletset = get_treelets(net, rules, rname)
-    
+
     # bug in Grammar --- redundant rules
 #     treeletset = set(tuple(treelet) for treelet in treeletset)
 #     treeletset = [list(treelet) for treelet in treeletset]
-    
+
     dp_all = []
     for treelet in treeletset:
         dp = compute_metric(net, actC_trace, treelet)
         dp_all.append(dp)
-        
+
     return np.array(dp_all).T
 
 
 # def rule2str(rule, add_prob=False, suppress_pos=False):
 #     '''Print a rule in a succinct form'''
 #     str1 = ''
-    
+
 #     if not suppress_pos:
 #         if rule['d1'] is not None:
 #             str1 += rule['d1']
@@ -7282,7 +7391,7 @@ def compute_treelet_act_trace(net, actC_trace, rules, rname):
 #         str1 += '({})'.format(rule['m'].split(':')[0])
 #         if rule['d2'] is not None:
 #             str1 += rule['d2'].split(':')[0]
-            
+
 #     if add_prob:
 #         if rule['p'] is not None:
 #             str1 += ' ({:.3f})'.format(rule['p'])
@@ -7293,7 +7402,7 @@ def compute_treelet_act_trace(net, actC_trace, rules, rname):
 def rule2str(rule, add_prob=False, suppress_pos=False):
     '''Print a rule in a succinct form'''
     str1 = ''
-    
+
     if not suppress_pos:
         str1 += rule['m']
         str1 += '('
@@ -7312,7 +7421,7 @@ def rule2str(rule, add_prob=False, suppress_pos=False):
         if rule['d2'] is not None:
             str1 += rule['d2'].split(':')[0]
         str1 += ')'
-            
+
     if add_prob:
         if rule['p'] is not None:
             str1 += ' ({:.3f})'.format(rule['p'])
@@ -7323,8 +7432,9 @@ def rule2str(rule, add_prob=False, suppress_pos=False):
 def create_rule_labels(rules, add_prob=False, suppress_pos=False):
     labs = []
     for rule in rules:
-        labs.append(rule2str(rule, add_prob=add_prob, suppress_pos=suppress_pos))
-        
+        labs.append(rule2str(rule, add_prob=add_prob,
+                    suppress_pos=suppress_pos))
+
     return labs
 
 
@@ -7344,29 +7454,31 @@ def get_windows(policy, sent):
 
 
 def plot_treelet_act_trace(
-    net, rname, num_treelets=4, 
-    tmin=0, tmax=1000, downsampling=30,
-    suppress_pos=True, add_prob=False, legend_pos=None):
-        
+        net, rname, num_treelets=4,
+        tmin=0, tmax=1000, downsampling=30,
+        suppress_pos=True, add_prob=False, legend_pos=None):
+
     # bug somewhere in gsc.py: contain multiple copies of augmented rules
     # remove redundancy
     rules0 = net.hg.g.get_rules()
     rules = []
     for rule in rules0:
         if rule not in rules:
-            rules.append(rule)    
-    
-    labs = create_rule_labels(rules, add_prob=add_prob, suppress_pos=suppress_pos)
-    
+            rules.append(rule)
+
+    labs = create_rule_labels(rules, add_prob=add_prob,
+                              suppress_pos=suppress_pos)
+
     idx = (net.traces['t'] >= tmin) * (net.traces['t'] <= tmax)
     actC_trace = net.traces['actC'][idx, :]
     dp_all = compute_treelet_act_trace(net, actC_trace, rules, rname)
-        
+
     temp = np.argsort(dp_all.sum(axis=0))
     focus_idx = temp[::-1][:num_treelets]
     labs_focus = [labs[ii] for ii in focus_idx]
 
-    plt.plot(net.traces['t'][idx][::downsampling], dp_all[::downsampling, focus_idx])
+    plt.plot(net.traces['t'][idx][::downsampling],
+             dp_all[::downsampling, focus_idx])
     if legend_pos is not None:
         plt.legend(labs_focus, loc=legend_pos)
     else:
