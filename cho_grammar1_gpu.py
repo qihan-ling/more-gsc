@@ -9,10 +9,32 @@ Note: Requires CuPy installation. Install with:
     pip install cupy-cuda12x  (for CUDA 12.x)
 """
 
+import sys
+import traceback
+
+# Set up error handling
+def handle_error(e, context=""):
+    """Print detailed error information"""
+    print("\n" + "="*70)
+    print(f"ERROR: {context}")
+    print("="*70)
+    print(f"Exception type: {type(e).__name__}")
+    print(f"Exception message: {str(e)}")
+    print("\nFull traceback:")
+    print("-"*70)
+    traceback.print_exc()
+    print("="*70)
+    sys.exit(1)
+
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for cluster
 import matplotlib.pyplot as plt
-import gsc_gpu as gsc  # GPU-accelerated version
+
+try:
+    import gsc_gpu as gsc  # GPU-accelerated version
+except Exception as e:
+    handle_error(e, "Failed to import gsc_gpu")
+
 import numpy as np
 import time
 
@@ -54,14 +76,20 @@ MAXLEN = 5
 print("\nInitializing Harmonic Grammar...")
 start_time = time.time()
 
-hg = gsc.HarmonicGrammar(pcfg=PCFG_G1, root=ROOT, max_sent_len=MAXLEN)
+try:
+    hg = gsc.HarmonicGrammar(pcfg=PCFG_G1, root=ROOT, max_sent_len=MAXLEN)
+except Exception as e:
+    handle_error(e, "Failed to initialize HarmonicGrammar")
 
 # Display fillers (should have 27 fillers × 15 roles = 405 units)
 print(f"Filler names: {hg.filler_names}")
 print(f"Number of fillers: {len(hg.filler_names)}")
 
 # Set all filler similarities to 0 (linear independence)
-sim = hg.get_simlist(dp=0.0)
+try:
+    sim = hg.get_simlist(dp=0.0)
+except Exception as e:
+    handle_error(e, "Failed to get similarity list")
 
 # Network options matching paper's parameters
 net_opts = {
@@ -75,9 +103,17 @@ net_opts = {
 
 # Initialize network
 print("\nInitializing GscNet...")
-net = gsc.GscNet(hg=hg, encodings={'similarity': sim},
-                 opts=net_opts, seed=1024)
-net.generate_corpus(use_freq=True)
+sys.stdout.flush()
+try:
+    net = gsc.GscNet(hg=hg, encodings={'similarity': sim},
+                     opts=net_opts, seed=1024)
+except Exception as e:
+    handle_error(e, "Failed to initialize GscNet")
+
+try:
+    net.generate_corpus(use_freq=True)
+except Exception as e:
+    handle_error(e, "Failed to generate corpus")
 
 print(f"Initialization time: {time.time() - start_time:.2f}s")
 

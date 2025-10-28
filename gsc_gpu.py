@@ -29,14 +29,46 @@ except ImportError:
 # Import numpy for operations that must stay on CPU
 import numpy as np_cpu
 
-# Now import gsc and monkey-patch it to use CuPy
+# Create a hybrid module that uses NumPy for some operations, CuPy for others
+class HybridNumPy:
+    """
+    Hybrid NumPy/CuPy module that uses GPU for heavy operations
+    but keeps light operations on CPU to avoid transfer overhead
+    """
+    def __init__(self, gpu_module, cpu_module):
+        self._gpu = gpu_module
+        self._cpu = cpu_module
+        self._GPU_AVAILABLE = GPU_AVAILABLE
+
+    def __getattr__(self, name):
+        # Keep random number generation on CPU for compatibility
+        if name == 'random':
+            return self._cpu.random
+        # Keep these light operations on CPU
+        elif name in ['array', 'zeros', 'ones', 'eye', 'arange', 'linspace']:
+            # For array creation, use CPU then convert to GPU as needed
+            return getattr(self._cpu, name)
+        # Use GPU for heavy operations
+        else:
+            if self._GPU_AVAILABLE:
+                return getattr(self._gpu, name)
+            else:
+                return getattr(self._cpu, name)
+
+# Create hybrid numpy
+if GPU_AVAILABLE:
+    np_hybrid = HybridNumPy(cp, np_cpu)
+else:
+    np_hybrid = np_cpu
+
+# Now import gsc and monkey-patch it to use hybrid NumPy
 import gsc
 
 # Store original numpy reference
 gsc._np_original = gsc.np
 
-# Replace numpy with cupy in gsc module
-gsc.np = cp
+# Replace numpy with hybrid module in gsc
+gsc.np = np_hybrid
 
 # Re-export all gsc classes and functions
 from gsc import *
