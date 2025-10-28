@@ -2058,9 +2058,9 @@ class GscNet():
     def __init__(self, hg=None, encodings=None, opts=None, qpolicy=None, seed=None):
 
         if seed is not None:
-            # Convert to int and use CPU random for stability
+            # Convert to int (handles CuPy arrays via .get() if needed)
             seed_int = int(seed) if hasattr(seed, '__int__') or isinstance(seed, (int, float)) else int(seed.get() if hasattr(seed, 'get') else seed)
-            np_cpu.random.seed(seed_int)
+            np.random.seed(seed_int)  # Uses cupy.random.seed when GPU available
 
         t0 = time.time()
         self.hg = hg
@@ -6602,9 +6602,9 @@ def dot_products(dp_mat, dim, max_iter=100000, seed=None, tol=1e-6):
         sys.exit('dim must be equal to or greater than num_symbols.')
 
     if seed is not None:
-        # Convert to int and use CPU random for stability
+        # Convert to int (handles CuPy arrays via .get() if needed)
         seed_int = int(seed) if hasattr(seed, '__int__') or isinstance(seed, (int, float)) else int(seed.get() if hasattr(seed, 'get') else seed)
-        np_cpu.random.seed(seed_int)
+        np.random.seed(seed_int)  # Uses cupy.random.seed when GPU available
 
     # if not (dp_mat.T == dp_mat).all():
     if not np.allclose(dp_mat.T, dp_mat):
