@@ -56,7 +56,6 @@ PCFG_G1 = '''
 0.35 S -> N Vi
 0.60 S -> N VP
 0.05 S -> NP Vi
-
 1.0 NP -> N RC
 1.0 RC -> Vpp PP
 1.0 VPpp -> Vpp PP
