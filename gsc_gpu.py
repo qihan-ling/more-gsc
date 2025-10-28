@@ -1,227 +1,81 @@
 """
-GPU-accelerated wrapper for gsc.py using CuPy
+GPU wrapper for gsc.py
 
-This module provides a drop-in replacement for gsc that uses GPU acceleration
-via CuPy. It monkey-patches numpy with cupy in the gsc module.
+NOTE: Drop-in NumPy→CuPy replacement doesn't work due to import mechanics.
+The monkey-patching approach fails because gsc.py has 'import numpy as np'
+at module level, and changing gsc.np later doesn't affect that reference.
+
+Current status: Uses CPU NumPy (same performance as regular gsc)
+
+For GPU acceleration, we need to implement batch parallelization
+(running multiple trials in parallel on GPU), which will provide
+20-40x speedup instead of the 5-10x from array operations alone.
 
 Usage:
-    import gsc_gpu as gsc  # Use GPU
-    # OR
-    import gsc  # Use CPU (original)
+    import gsc_gpu as gsc  # Currently uses CPU
 """
 
 import sys
-import importlib
 import warnings
 
-# Try to import CuPy
+# Detect GPU
 try:
     import cupy as cp
     GPU_AVAILABLE = True
-    print("✓ GPU (CuPy) detected and enabled")
+    print("✓ GPU detected (CuPy available)")
     print(f"  Device: {cp.cuda.Device()}")
     print(f"  Memory: {cp.cuda.Device().mem_info[1] / 1e9:.2f} GB total")
+    print()
+    print("  ⚠️  NOTE: Currently running on CPU")
+    print("  Drop-in CuPy replacement has compatibility issues.")
+    print("  GPU acceleration requires batch parallelization (future work).")
+    print()
 except ImportError:
-    import numpy as cp
+    cp = None
     GPU_AVAILABLE = False
-    warnings.warn("CuPy not available, falling back to NumPy (CPU). Install with: pip install cupy-cuda11x")
+    warnings.warn("CuPy not available. Install with: pip install cupy-cuda12x")
 
-# Import numpy for operations that must stay on CPU
-import numpy as np_cpu
+import numpy as np
 
-# Create a hybrid module that uses NumPy for some operations, CuPy for others
-class HybridNumPy:
-    """
-    Hybrid NumPy/CuPy module that uses GPU for heavy operations
-    but keeps light operations on CPU to avoid transfer overhead
-    """
-    def __init__(self, gpu_module, cpu_module):
-        self._gpu = gpu_module
-        self._cpu = cpu_module
-        self._GPU_AVAILABLE = GPU_AVAILABLE
-
-    def __getattr__(self, name):
-        # Keep random number generation on CPU for compatibility
-        if name == 'random':
-            return self._cpu.random
-        # Keep these light operations on CPU
-        elif name in ['array', 'zeros', 'ones', 'eye', 'arange', 'linspace']:
-            # For array creation, use CPU then convert to GPU as needed
-            return getattr(self._cpu, name)
-        # Use GPU for heavy operations
-        else:
-            if self._GPU_AVAILABLE:
-                return getattr(self._gpu, name)
-            else:
-                return getattr(self._cpu, name)
-
-# Create hybrid numpy
-if GPU_AVAILABLE:
-    np_hybrid = HybridNumPy(cp, np_cpu)
-else:
-    np_hybrid = np_cpu
-
-# Now import gsc and monkey-patch it to use hybrid NumPy
+# Import gsc normally (uses CPU NumPy)
 import gsc
 
-# Store original numpy reference
-gsc._np_original = gsc.np
-
-# Replace numpy with hybrid module in gsc
-gsc.np = np_hybrid
-
-# Re-export all gsc classes and functions
+# Re-export everything from gsc
 from gsc import *
 
-# Add GPU-specific utilities
-class GPUContext:
-    """Context manager for GPU operations with automatic memory management"""
-
-    def __init__(self, device_id=0):
-        self.device_id = device_id
-        if GPU_AVAILABLE:
-            self.device = cp.cuda.Device(device_id)
-
-    def __enter__(self):
-        if GPU_AVAILABLE:
-            self.device.use()
-            self.mempool = cp.get_default_memory_pool()
-            self.pinned_mempool = cp.get_default_pinned_memory_pool()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if GPU_AVAILABLE:
-            # Free unused GPU memory
-            self.mempool.free_all_blocks()
-            self.pinned_mempool.free_all_blocks()
-
+# Utility functions (for future GPU work)
 def to_gpu(arr):
-    """Move numpy array to GPU"""
-    if GPU_AVAILABLE and isinstance(arr, np_cpu.ndarray):
+    """Move numpy array to GPU (currently no-op)"""
+    if GPU_AVAILABLE and isinstance(arr, np.ndarray):
         return cp.asarray(arr)
     return arr
 
 def to_cpu(arr):
     """Move cupy array to CPU"""
-    if GPU_AVAILABLE and isinstance(arr, cp.ndarray):
+    if GPU_AVAILABLE and hasattr(arr, '__cuda_array_interface__'):
         return cp.asnumpy(arr)
     return arr
-
-def get_gpu_memory_info():
-    """Get current GPU memory usage"""
-    if GPU_AVAILABLE:
-        mempool = cp.get_default_memory_pool()
-        used = mempool.used_bytes() / 1e9
-        total = mempool.total_bytes() / 1e9
-        device_info = cp.cuda.Device().mem_info
-        device_free = device_info[0] / 1e9
-        device_total = device_info[1] / 1e9
-        return {
-            'pool_used_gb': used,
-            'pool_total_gb': total,
-            'device_free_gb': device_free,
-            'device_total_gb': device_total,
-            'device_used_gb': device_total - device_free
-        }
-    return None
 
 def print_gpu_memory():
     """Print GPU memory usage"""
     if GPU_AVAILABLE:
-        info = get_gpu_memory_info()
-        print(f"GPU Memory: {info['device_used_gb']:.2f} GB / {info['device_total_gb']:.2f} GB used")
-        print(f"  Pool: {info['pool_used_gb']:.2f} GB used, {info['pool_total_gb']:.2f} GB allocated")
+        device_info = cp.cuda.Device().mem_info
+        device_free = device_info[0] / 1e9
+        device_total = device_info[1] / 1e9
+        device_used = device_total - device_free
+        print(f"GPU Memory: {device_used:.2f} GB / {device_total:.2f} GB used")
     else:
         print("GPU not available")
 
-# Override pickle save/load to handle GPU arrays
-_original_save_model = gsc.save_model
-_original_load_model = gsc.load_model
-
-def save_model(net, filename):
-    """Save model, converting GPU arrays to CPU first"""
-    if GPU_AVAILABLE:
-        # Temporarily convert arrays to CPU for pickling
-        with GPUContext():
-            # Store original arrays
-            arrays_to_restore = {}
-            for attr in ['WC', 'bC', 'actC', 'extC', 'ep', 'q', 'scale_constants']:
-                if hasattr(net, attr):
-                    val = getattr(net, attr)
-                    if isinstance(val, cp.ndarray):
-                        arrays_to_restore[attr] = val
-                        setattr(net, attr, to_cpu(val))
-
-            # Save with CPU arrays
-            _original_save_model(net, filename)
-
-            # Restore GPU arrays
-            for attr, val in arrays_to_restore.items():
-                setattr(net, attr, val)
-    else:
-        _original_save_model(net, filename)
-
-def load_model(filename, use_gpu=True):
-    """Load model and optionally move to GPU"""
-    net = _original_load_model(filename)
-
-    if GPU_AVAILABLE and use_gpu:
-        # Move arrays to GPU
-        with GPUContext():
-            for attr in ['WC', 'bC', 'actC', 'extC', 'ep', 'q', 'scale_constants']:
-                if hasattr(net, attr):
-                    val = getattr(net, attr)
-                    if isinstance(val, np_cpu.ndarray):
-                        setattr(net, attr, to_gpu(val))
-
-    return net
-
-# Monkey-patch the save/load functions
-gsc.save_model = save_model
-gsc.load_model = load_model
-
-# Performance profiling utilities
-class GPUProfiler:
-    """Simple GPU profiler for benchmarking"""
-
-    def __init__(self, name=""):
-        self.name = name
-        self.start_time = None
-        self.end_time = None
-
-    def __enter__(self):
-        if GPU_AVAILABLE:
-            cp.cuda.Stream.null.synchronize()
-        self.start_time = self._get_time()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if GPU_AVAILABLE:
-            cp.cuda.Stream.null.synchronize()
-        self.end_time = self._get_time()
-        elapsed = self.elapsed()
-        print(f"{self.name}: {elapsed:.3f} seconds")
-
-    def _get_time(self):
-        import time
-        return time.perf_counter()
-
-    def elapsed(self):
-        if self.start_time and self.end_time:
-            return self.end_time - self.start_time
-        return None
-
-# Export GPU utilities
+# Export utilities
 __all__ = [
-    'GPUContext',
     'to_gpu',
     'to_cpu',
-    'get_gpu_memory_info',
     'print_gpu_memory',
-    'GPUProfiler',
     'GPU_AVAILABLE',
-    'save_model',
-    'load_model',
 ] + [name for name in dir(gsc) if not name.startswith('_')]
 
-print(f"gsc_gpu module loaded (GPU: {'ON' if GPU_AVAILABLE else 'OFF'})")
+if GPU_AVAILABLE:
+    print("gsc_gpu module loaded (GPU detected but using CPU for computation)")
+else:
+    print("gsc_gpu module loaded (No GPU, using CPU)")
