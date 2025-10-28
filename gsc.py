@@ -10,11 +10,22 @@ try:
     import numpy as np_cpu  # Keep CPU numpy for some operations
     print("gsc.py: Using CuPy (GPU acceleration enabled)")
     GPU_AVAILABLE = True
+
+    # Helper to convert CuPy scalars to Python int (for indexing lists)
+    def _to_int(x):
+        """Convert CuPy/NumPy scalar to Python int"""
+        return int(x.get()) if hasattr(x, 'get') else int(x)
+
 except ImportError:
     import numpy as np
     from numpy import linalg
     np_cpu = np  # Same as np when no GPU
     GPU_AVAILABLE = False
+
+    # When no GPU, simple int conversion
+    def _to_int(x):
+        """Convert to Python int"""
+        return int(x)
 
 import numbers
 import matplotlib.pyplot as plt
@@ -896,7 +907,8 @@ class PCFG():
             prob = np.array(prob)
             prob /= prob.sum()
             fi = np.random.choice(len(fillers), size=1, p=prob)
-            return fillers[fi[0]], prob[fi[0]]
+            fi = _to_int(fi[0])  # Convert to Python int for list indexing
+            return fillers[fi], prob[fi]
 
         def expand(node):
             terminals = []
@@ -907,10 +919,11 @@ class PCFG():
                 prob = np.array([rule['p'] for rule in rules])
                 prob /= prob.sum()
                 rulei = np.random.choice(len(prob), size=1, p=prob)
+                rulei = _to_int(rulei[0])  # Convert to Python int for list indexing
                 # print(rules, prob, rulei)
                 # print(rules[rulei])
-                rule = rules[rulei[0]]
-                p *= prob[rulei[0]]
+                rule = rules[rulei]
+                p *= prob[rulei]
 
                 d1sym = rule['d1']
                 d2sym = rule['d2']
