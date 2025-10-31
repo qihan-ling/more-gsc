@@ -4664,7 +4664,7 @@ class GscNet():
             corpus[key] = [self.corpus[key][si]
                            for si in range(nsent)
                            if si in idx]
-            if key != 'sentence':
+            if key is not 'sentence':
                 corpus[key] = np.array(corpus[key])
 
         # Normalize probabilities
