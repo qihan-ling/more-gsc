@@ -13,6 +13,18 @@ import copy
 import time
 from matplotlib.patches import Rectangle
 
+# JAX imports for GPU acceleration
+try:
+    import jax
+    import jax.numpy as jnp
+    from jax import vmap, jit
+    from functools import partial
+    JAX_AVAILABLE = True
+    print("JAX detected - GPU acceleration enabled")
+except ImportError:
+    JAX_AVAILABLE = False
+    print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
+
 
 class Node():
     # Class PCFG uses this Node class to represent a binary tree structure
@@ -2046,6 +2058,57 @@ class HarmonicGrammar():
         self.binding_names = [f + self.opts['bsep'] + r
                               for r in self.role_names
                               for f in self.filler_names]
+
+
+# =============================================================================
+# JAX-ACCELERATED TRIAL EXECUTION
+# =============================================================================
+# These functions enable GPU-accelerated parallel trial execution
+
+if JAX_AVAILABLE:
+
+    def _run_single_trial_jax(rng_key, net_params, prefix, update_q_discrete):
+        """
+        Pure functional version of a single trial for JAX.
+
+        Args:
+            rng_key: JAX random key for this trial
+            net_params: Dictionary containing network parameters and state
+            prefix: List of filler names for the prefix
+            update_q_discrete: Boolean for q update mode
+
+        Returns:
+            actC: Final activation state (num_bindings,)
+            grid_point_indices: Grid point as filler indices per role (num_roles,)
+        """
+        # This is a placeholder - we'll implement the full dynamics later
+        # For now, return dummy values to test the infrastructure
+        actC = jnp.zeros(net_params['num_bindings'])
+        grid_point = jnp.zeros(net_params['num_roles'], dtype=jnp.int32)
+        return actC, grid_point
+
+    def _extract_net_params_for_jax(net):
+        """Extract network parameters into a JAX-compatible dictionary."""
+        params = {
+            'num_bindings': net.num_bindings,
+            'num_roles': net.num_roles,
+            'num_fillers': net.num_fillers,
+            'WC': jnp.array(net.WC),
+            'bC': jnp.array(net.bC),
+            'estr': jnp.array(net.estr),
+            'ep': jnp.array(net.ep),
+            'init_noise_mag': net.train_opts['init_noise_mag'],
+            'q_init': net.opts['q_init'],
+            'q_max': net.opts['q_max'],
+            'q_rate': net.opts['q_rate'],
+            'dt_init': net.opts['dt_init'],
+            'T_init': net.opts['T_init'],
+            'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
+        }
+        return params
+
+    # Create batched version using vmap
+    _run_trials_batched_jax = vmap(_run_single_trial_jax, in_axes=(0, None, None, None))
 
 
 class GscNet():
@@ -5440,6 +5503,75 @@ class GscNet():
 
         # self.actC_list = np.array(self.actC_list)
         # self.prob_bindings = actC_mean / num_trials
+
+    def estimate_prob_inc_jax(self, prefix, num_trials=40, progress=0, update_q_discrete=False, rng_seed=None):
+        """
+        JAX-accelerated version of estimate_prob_inc.
+
+        Runs all trials in parallel on GPU for massive speedup.
+        Falls back to original CPU version if JAX is not available.
+
+        Args:
+            prefix: List of filler names for the prefix
+            num_trials: Number of trials to run in parallel
+            progress: Progress reporting interval
+            update_q_discrete: Boolean for q update mode
+            rng_seed: Random seed for reproducibility
+
+        Returns:
+            stat: Corpus statistics (same format as original)
+            actC_list: Array of activation states (num_trials, num_bindings)
+        """
+        if not JAX_AVAILABLE:
+            print("JAX not available, falling back to CPU version")
+            return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
+
+        print(f"Running {num_trials} trials in parallel on GPU...")
+        t0 = time.time()
+
+        # Extract network parameters for JAX
+        net_params = _extract_net_params_for_jax(self)
+
+        # Generate random keys for each trial
+        if rng_seed is None:
+            rng_seed = np.random.randint(0, 1000000)
+        rng = jax.random.PRNGKey(rng_seed)
+        rng_keys = jax.random.split(rng, num_trials)
+
+        # Run all trials in parallel on GPU
+        actC_batch, grid_point_batch = _run_trials_batched_jax(
+            rng_keys, net_params, prefix, update_q_discrete
+        )
+
+        # Convert back to numpy for compatibility with existing code
+        actC_batch = np.array(actC_batch)
+
+        print(f"GPU execution time: {time.time() - t0:.3f}s")
+
+        # Process results (same as original - aggregate unique states)
+        corpus = {}
+        corpus['target'] = []
+        corpus['count'] = []
+        corpus['prob_sent'] = []
+        actC_list = []
+
+        for trial_id in range(num_trials):
+            actC = actC_batch[trial_id]
+            actC_list.append(list(actC))
+
+            if list(actC) not in corpus['target']:
+                corpus['target'].append(list(actC))
+                corpus['count'].append(1)
+            else:
+                idx = corpus['target'].index(list(actC))
+                corpus['count'][idx] += 1
+
+        corpus['target'] = np.array(corpus['target'])
+        corpus['count'] = np.array(corpus['count'])
+        corpus['prob_sent'] = corpus['count'] / corpus['count'].sum()
+
+        stat = self.get_corpus_stat(corpus)
+        return stat, np.array(actC_list)
 
     def ema_stat(self, stat_new, stat_old, weight=None):
 
