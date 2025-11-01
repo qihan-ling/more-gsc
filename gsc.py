@@ -2081,10 +2081,83 @@ if JAX_AVAILABLE:
             actC: Final activation state (num_bindings,)
             grid_point_indices: Grid point as filler indices per role (num_roles,)
         """
-        # This is a placeholder - we'll implement the full dynamics later
-        # For now, return dummy values to test the infrastructure
-        actC = jnp.zeros(net_params['num_bindings'])
-        grid_point = jnp.zeros(net_params['num_roles'], dtype=jnp.int32)
+        # Initialize state with noise
+        rng_key, noise_key = jax.random.split(rng_key)
+        noise = jax.random.normal(noise_key, (net_params['num_bindings'],)) * net_params['init_noise_mag']
+        actC = net_params['ep'] + noise
+
+        # Initialize other state variables
+        q = jnp.ones(net_params['num_roles']) * net_params['q_init']
+        T = net_params['T_init']
+        t = 0.0
+        dt = net_params['dt_init']
+
+        # For now, skip prefix (implement later)
+        # Just run wrapup dynamics
+
+        # Calculate duration for wrapup
+        duration = jnp.max(net_params['q_max'] - q) / net_params['q_rate']
+        num_steps = jnp.int32(jnp.ceil(duration / dt))
+
+        # Run dynamics using scan
+        def step_fn(carry, _):
+            actC, q, T, t, rng = carry
+
+            # Split RNG for this step
+            rng, step_rng = jax.random.split(rng)
+
+            # Compute gradient (simplified version of HGradC)
+            # For now, implement basic dynamics
+            WC = net_params['WC']
+            bC = net_params['bC']
+            extC = jnp.zeros(net_params['num_bindings'])  # No input for wrapup
+
+            # Reshape actC to matrix form (fillers × roles)
+            actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
+
+            # Gradient components
+            hgrad_g = WC @ actC + bC + extC
+            hgrad_b = 0.0  # Simplified: ignore bowl for now
+
+            # q gradient (commitment)
+            q_extended = jnp.repeat(q, net_params['num_fillers'])
+            hgrad_q0 = -2 * q_extended * actC * (1 - actC) * (1 - 2 * actC)
+
+            # Role filling constraint
+            ssq = jnp.sum(actCmat ** 2, axis=0)
+            ssq_extended = jnp.repeat(ssq - 1, net_params['num_fillers'])
+            hgrad_q1 = -4 * 1.0 * actC * ssq_extended  # m=1.0 default
+
+            gradC = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
+
+            # Euler integration
+            actC = actC + dt * gradC
+
+            # Add noise
+            noise = jax.random.normal(step_rng, actC.shape) * jnp.sqrt(2 * T * dt)
+            actC = actC + noise
+
+            # Update q
+            q = q + net_params['q_rate'] * dt
+            q = jnp.clip(q, 0, net_params['q_max'])
+
+            # Update time
+            t = t + dt
+
+            return (actC, q, T, t, rng), None
+
+        # Run dynamics loop
+        (actC, q, T, t, rng_key), _ = jax.lax.scan(
+            step_fn,
+            (actC, q, T, t, rng_key),
+            None,
+            length=num_steps
+        )
+
+        # Extract grid point (argmax per role)
+        actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
+        grid_point = jnp.argmax(actCmat, axis=0)
+
         return actC, grid_point
 
     def _extract_net_params_for_jax(net):
@@ -2100,7 +2173,7 @@ if JAX_AVAILABLE:
             'init_noise_mag': net.train_opts['init_noise_mag'],
             'q_init': net.opts['q_init'],
             'q_max': net.opts['q_max'],
-            'q_rate': net.opts['q_rate'],
+            'q_rate': net.opts.get('q_rate', 1.0),  # Default to 1.0 if not found
             'dt_init': net.opts['dt_init'],
             'T_init': net.opts['T_init'],
             'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
