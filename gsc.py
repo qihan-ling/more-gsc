@@ -5671,7 +5671,8 @@ class GscNet():
             grid_point = grid_point_batch[trial_id]
             actC_discrete = np.zeros(self.num_bindings)
             for role_idx, filler_idx in enumerate(grid_point):
-                binding_idx = int(filler_idx) * self.num_roles + role_idx
+                # Use Fortran order indexing to match binding_names order
+                binding_idx = role_idx * self.num_fillers + int(filler_idx)
                 actC_discrete[binding_idx] = 1.0
 
             # Aggregate using discrete states (like CPU version)
