@@ -2106,14 +2106,14 @@ if JAX_AVAILABLE:
             # Split RNG for this step
             rng, step_rng = jax.random.split(rng)
 
-            # Extract parameters
+            # Extract parameters (ensure all are JAX arrays/scalars)
             WC = net_params['WC']
             bC = net_params['bC']
             S = net_params['S']
             scale_constants = net_params['scale_constants']
-            bowl_strength = net_params['bowl_strength']
-            bowl_center = net_params['bowl_center']
-            m = net_params['m']
+            bowl_strength = float(net_params['bowl_strength'])  # Ensure scalar
+            bowl_center = float(net_params['bowl_center'])      # Ensure scalar
+            m = float(net_params['m'])                          # Ensure scalar
 
             extC = jnp.zeros(net_params['num_bindings'])  # No input for wrapup
 
