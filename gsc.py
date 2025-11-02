@@ -2067,14 +2067,88 @@ class HarmonicGrammar():
 
 if JAX_AVAILABLE:
 
+    def _compute_scale_constants_jax(pos, net_params):
+        """
+        Compute scale_constants for role masking based on word position.
+
+        Args:
+            pos: Word position (0 for wrapup, 1+ for prefix words)
+            net_params: Dictionary containing role information
+
+        Returns:
+            scale_constants: Array of shape (num_bindings,) with exponential weights
+        """
+        num_bindings = net_params['num_bindings']
+        num_roles = net_params['num_roles']
+        num_fillers = net_params['num_fillers']
+
+        if pos == 0:
+            # Wrapup: all roles active
+            return jnp.ones(num_bindings)
+
+        # Get parameters
+        scale_type = net_params.get('scale_type', 'diagonal')
+        scaling_factor = net_params.get('scaling_factor', 1.0)
+        role_names_tuples = net_params['role_names_tuples']  # List of (lv, pos) tuples
+
+        # Convert to JAX arrays for vectorized operations
+        lv_array = jnp.array([t[0] for t in role_names_tuples])  # Level for each role
+        pos_array = jnp.array([t[1] for t in role_names_tuples])  # Position for each role
+
+        # Compute weight for each role
+        if scale_type == 'diagonal':
+            # Symmetric diagonal weighting
+            role_weights = jnp.exp(-jnp.abs(lv_array + pos_array - (pos + 1)) * scaling_factor)
+        elif scale_type == 'pos':
+            # Position-based weighting
+            role_weights = jnp.exp(-jnp.abs(pos_array - pos) * scaling_factor)
+        else:
+            role_weights = jnp.ones(num_roles)
+
+        # Expand role weights to binding weights
+        # Each role's weight applies to all its fillers
+        # weights[ri * num_fillers : (ri+1) * num_fillers] = role_weights[ri]
+        weights = jnp.repeat(role_weights, num_fillers)
+
+        return weights
+
+    def _compute_external_input_jax(binding_name, net_params):
+        """
+        Compute external input extC for a given binding name.
+
+        Args:
+            binding_name: String like "N:0/(1,1)"
+            net_params: Dictionary containing binding_names list and estr
+
+        Returns:
+            extC: Array of shape (num_bindings,) with input at specified binding
+        """
+        num_bindings = net_params['num_bindings']
+        binding_names = net_params['binding_names']
+        estr = net_params['estr']
+
+        # Find binding index
+        try:
+            binding_idx = binding_names.index(binding_name)
+        except ValueError:
+            # Binding not found, return zero input
+            return jnp.zeros(num_bindings)
+
+        # Create external input
+        extC = jnp.zeros(num_bindings)
+        extC = extC.at[binding_idx].set(estr)
+
+        return extC
+
     def _run_single_trial_jax(rng_key, net_params, prefix, update_q_discrete):
         """
         Pure functional version of a single trial for JAX.
+        Now includes prefix handling.
 
         Args:
             rng_key: JAX random key for this trial
             net_params: Dictionary containing network parameters and state
-            prefix: List of filler names for the prefix
+            prefix: List of filler names for the prefix (e.g., ['N:0', 'Vi:0'])
             update_q_discrete: Boolean for q update mode
 
         Returns:
@@ -2089,94 +2163,109 @@ if JAX_AVAILABLE:
         # Initialize other state variables
         q = jnp.ones(net_params['num_roles']) * net_params['q_init']
         T = net_params['T_init']
-        t = 0.0
         dt = net_params['dt_init']
 
-        # For now, skip prefix (implement later)
-        # Just run wrapup dynamics
-
-        # Calculate duration for wrapup
-        duration = jnp.max(net_params['q_max'] - q) / net_params['q_rate']
-        num_steps = jnp.int32(jnp.ceil(duration / dt))
-
-        # Run dynamics using scan
-        def step_fn(carry, _):
-            actC, q, T, t, rng = carry
+        # Define dynamics step function (shared by prefix and wrapup)
+        def dynamics_step(carry, _):
+            """Single dynamics step."""
+            actC, q, T, rng, extC_val, scale_const, q_max_val = carry
 
             # Split RNG for this step
             rng, step_rng = jax.random.split(rng)
 
-            # Extract parameters (ensure all are JAX arrays/scalars)
+            # Extract parameters
             WC = net_params['WC']
             bC = net_params['bC']
             S = net_params['S']
-            C = net_params['C']  # Basis change matrix
-            scale_constants = net_params['scale_constants']
-            bowl_strength = float(net_params['bowl_strength'])  # Ensure scalar
-            bowl_center = float(net_params['bowl_center'])      # Ensure scalar
-            m = float(net_params['m'])                          # Ensure scalar
-
-            extC = jnp.zeros(net_params['num_bindings'])  # No input for wrapup
+            C = net_params['C']
+            bowl_strength = float(net_params['bowl_strength'])
+            bowl_center = float(net_params['bowl_center'])
+            m = float(net_params['m'])
 
             # Reshape actC to matrix form (fillers × roles)
             actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
 
-            # ===================================================================
-            # Compute HGradC (Harmony gradient in conceptual coordinates)
-            # ===================================================================
-
-            # 1. Grammar component (weights + biases + external input)
-            hgrad_g = WC @ actC + bC + extC
-
-            # 2. Bowl constraints (attraction to bowl center)
+            # Compute Harmony gradient components
+            hgrad_g = WC @ actC + bC + extC_val
             hgrad_b = bowl_strength * (bowl_center - actC)
-
-            # 3. Commitment energy (q term) - pushes toward 0 or 1
             q_extended = jnp.repeat(q, net_params['num_fillers'])
             hgrad_q0 = -2 * q_extended * actC * (1 - actC) * (1 - 2 * actC)
-
-            # 4. Role-filling constraint - one filler per role
             ssq = jnp.sum(actCmat ** 2, axis=0)
             ssq_extended = jnp.repeat(ssq - 1, net_params['num_fillers'])
             hgrad_q1 = -4 * m * actC * ssq_extended
 
-            # Combine gradient components
+            # Combine and transform gradient
             HGradC_val = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
-
-            # ===================================================================
-            # CRITICAL: Apply S matrix and scale_constants
-            # ===================================================================
-            # This matches the original: gradC = scale_constants * S.dot(HGradC())
-            gradC = scale_constants * (S @ HGradC_val)
+            gradC = scale_const * (S @ HGradC_val)
 
             # Euler integration
             actC = actC + dt * gradC
 
-            # ===================================================================
-            # CRITICAL: Add noise correctly
-            # ===================================================================
-            # CPU version: noise in neural space, transform to conceptual via C matrix
-            # noise = sqrt(2*T*dt) * randn(num_units)
-            # noiseC = sqrt(scale_constants) * C.dot(noise)
+            # Add noise in neural space, transform to conceptual
             noise_neural = jax.random.normal(step_rng, (net_params['num_units'],)) * jnp.sqrt(2 * T * dt)
-            noiseC = jnp.sqrt(scale_constants) * (C @ noise_neural)
+            noiseC = jnp.sqrt(scale_const) * (C @ noise_neural)
             actC = actC + noiseC
 
             # Update q
             q = q + net_params['q_rate'] * dt
-            q = jnp.clip(q, 0, net_params['q_max'])
+            q = jnp.clip(q, 0, q_max_val)
 
-            # Update time
-            t = t + dt
+            return (actC, q, T, rng, extC_val, scale_const, q_max_val), None
 
-            return (actC, q, T, t, rng), None
+        # Process prefix words if any
+        if prefix is not None and len(prefix) > 0:
+            qpolicy = net_params['qpolicy']
+            bsep = net_params['bsep']
 
-        # Run dynamics loop
-        (actC, q, T, t, rng_key), _ = jax.lax.scan(
-            step_fn,
-            (actC, q, T, t, rng_key),
+            for wpos, fname in enumerate(prefix, start=1):
+                # Construct binding name
+                binding_name = f"{fname}{bsep}(1,{wpos})"
+
+                # Compute external input
+                extC = _compute_external_input_jax(binding_name, net_params)
+
+                # Compute scale_constants if enabled
+                if net_params['update_scale_constants']:
+                    scale_constants = _compute_scale_constants_jax(wpos, net_params)
+                else:
+                    scale_constants = jnp.ones(net_params['num_bindings'])
+
+                # Set q_max for this word
+                q_max_word = qpolicy[wpos]
+
+                # Calculate duration for this word
+                q_inc = qpolicy[wpos] - qpolicy[wpos - 1]
+                duration = jnp.max(q_inc) / net_params['q_rate']
+                num_steps = jnp.int32(jnp.ceil(duration / dt))
+
+                # Run dynamics for this prefix word
+                (actC, q, T, rng_key, _, _, _), _ = jax.lax.scan(
+                    dynamics_step,
+                    (actC, q, T, rng_key, extC, scale_constants, q_max_word),
+                    None,
+                    length=num_steps
+                )
+
+        # Wrapup phase: clear input, reset scale_constants, run to completion
+        extC_wrapup = jnp.zeros(net_params['num_bindings'])
+
+        if net_params['update_scale_constants']:
+            scale_constants_wrapup = _compute_scale_constants_jax(0, net_params)
+        else:
+            scale_constants_wrapup = jnp.ones(net_params['num_bindings'])
+
+        q_max_final = net_params['q_max']
+
+        # Calculate wrapup duration
+        duration_wrapup = jnp.max(q_max_final - q) / net_params['q_rate']
+        num_steps_wrapup = jnp.int32(jnp.ceil(duration_wrapup / dt))
+
+        # Run wrapup dynamics
+        (actC, q, T, rng_key, _, _, _), _ = jax.lax.scan(
+            dynamics_step,
+            (actC, q, T, rng_key, extC_wrapup, scale_constants_wrapup, q_max_final),
             None,
-            length=num_steps
+            length=num_steps_wrapup
         )
 
         # Extract grid point (argmax per role)
@@ -2187,6 +2276,14 @@ if JAX_AVAILABLE:
 
     def _extract_net_params_for_jax(net):
         """Extract network parameters into a JAX-compatible dictionary."""
+
+        # Extract role position tuples for scale_constants computation
+        role_names_tuples = []
+        if hasattr(net.hg, 'roles'):
+            for rname in net.role_names:
+                lv, pos = net.hg.roles.str2tuple(rname)
+                role_names_tuples.append((lv, pos))
+
         params = {
             'num_bindings': net.num_bindings,
             'num_roles': net.num_roles,
@@ -2194,7 +2291,7 @@ if JAX_AVAILABLE:
             'num_units': net.num_units,  # Neural space dimension
             'WC': jnp.array(net.WC),
             'bC': jnp.array(net.bC),
-            'estr': jnp.array(net.estr),
+            'estr': float(net.estr[0]) if hasattr(net.estr, '__len__') else float(net.estr),  # External input strength
             'ep': jnp.array(net.ep),
             'init_noise_mag': net.train_opts['init_noise_mag'],
             'q_init': net.opts['q_init'],
@@ -2210,6 +2307,13 @@ if JAX_AVAILABLE:
             'bowl_center': net.opts.get('bowl_center', 0.5),
             'm': net.opts.get('m', 1.0),  # Role-filling constraint strength
             'scale_constants': jnp.array(net.scale_constants) if hasattr(net, 'scale_constants') else jnp.ones(net.num_bindings),
+            # For prefix handling
+            'binding_names': net.binding_names,  # List of binding name strings
+            'bsep': net.hg.opts['bsep'] if hasattr(net.hg, 'opts') else '/',  # Binding separator
+            'role_names_tuples': role_names_tuples,  # List of (lv, pos) tuples
+            'scale_type': net.opts.get('scale_type', 'diagonal'),
+            'scaling_factor': net.opts.get('scaling_factor', 1.0),
+            'update_scale_constants': net.train_opts.get('update_scale_constants', False),
         }
         return params
 
