@@ -5651,10 +5651,12 @@ class GscNet():
 
         # Convert back to numpy for compatibility with existing code
         actC_batch = np.array(actC_batch)
+        grid_point_batch = np.array(grid_point_batch)
 
         print(f"GPU execution time: {time.time() - t0:.3f}s")
 
-        # Process results (same as original - aggregate unique states)
+        # CRITICAL FIX: Use grid points (discrete) not continuous actC for aggregation
+        # Convert grid point indices to one-hot actC vectors (like CPU version does)
         corpus = {}
         corpus['target'] = []
         corpus['count'] = []
@@ -5662,14 +5664,22 @@ class GscNet():
         actC_list = []
 
         for trial_id in range(num_trials):
-            actC = actC_batch[trial_id]
-            actC_list.append(list(actC))
+            # Store continuous actC for return value
+            actC_list.append(list(actC_batch[trial_id]))
 
-            if list(actC) not in corpus['target']:
-                corpus['target'].append(list(actC))
+            # Convert grid point (filler indices per role) to one-hot actC
+            grid_point = grid_point_batch[trial_id]
+            actC_discrete = np.zeros(self.num_bindings)
+            for role_idx, filler_idx in enumerate(grid_point):
+                binding_idx = int(filler_idx) * self.num_roles + role_idx
+                actC_discrete[binding_idx] = 1.0
+
+            # Aggregate using discrete states (like CPU version)
+            if list(actC_discrete) not in corpus['target']:
+                corpus['target'].append(list(actC_discrete))
                 corpus['count'].append(1)
             else:
-                idx = corpus['target'].index(list(actC))
+                idx = corpus['target'].index(list(actC_discrete))
                 corpus['count'][idx] += 1
 
         corpus['target'] = np.array(corpus['target'])
