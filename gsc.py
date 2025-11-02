@@ -2106,29 +2106,47 @@ if JAX_AVAILABLE:
             # Split RNG for this step
             rng, step_rng = jax.random.split(rng)
 
-            # Compute gradient (simplified version of HGradC)
-            # For now, implement basic dynamics
+            # Extract parameters
             WC = net_params['WC']
             bC = net_params['bC']
+            S = net_params['S']
+            scale_constants = net_params['scale_constants']
+            bowl_strength = net_params['bowl_strength']
+            bowl_center = net_params['bowl_center']
+            m = net_params['m']
+
             extC = jnp.zeros(net_params['num_bindings'])  # No input for wrapup
 
             # Reshape actC to matrix form (fillers × roles)
             actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
 
-            # Gradient components
-            hgrad_g = WC @ actC + bC + extC
-            hgrad_b = 0.0  # Simplified: ignore bowl for now
+            # ===================================================================
+            # Compute HGradC (Harmony gradient in conceptual coordinates)
+            # ===================================================================
 
-            # q gradient (commitment)
+            # 1. Grammar component (weights + biases + external input)
+            hgrad_g = WC @ actC + bC + extC
+
+            # 2. Bowl constraints (attraction to bowl center)
+            hgrad_b = bowl_strength * (bowl_center - actC)
+
+            # 3. Commitment energy (q term) - pushes toward 0 or 1
             q_extended = jnp.repeat(q, net_params['num_fillers'])
             hgrad_q0 = -2 * q_extended * actC * (1 - actC) * (1 - 2 * actC)
 
-            # Role filling constraint
+            # 4. Role-filling constraint - one filler per role
             ssq = jnp.sum(actCmat ** 2, axis=0)
             ssq_extended = jnp.repeat(ssq - 1, net_params['num_fillers'])
-            hgrad_q1 = -4 * 1.0 * actC * ssq_extended  # m=1.0 default
+            hgrad_q1 = -4 * m * actC * ssq_extended
 
-            gradC = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
+            # Combine gradient components
+            HGradC_val = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
+
+            # ===================================================================
+            # CRITICAL: Apply S matrix and scale_constants
+            # ===================================================================
+            # This matches the original: gradC = scale_constants * S.dot(HGradC())
+            gradC = scale_constants * (S @ HGradC_val)
 
             # Euler integration
             actC = actC + dt * gradC
@@ -2177,6 +2195,12 @@ if JAX_AVAILABLE:
             'dt_init': net.opts['dt_init'],
             'T_init': net.opts['T_init'],
             'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
+            # Critical parameters for correct gradient computation
+            'S': jnp.array(net.S),  # Inverse similarity matrix
+            'bowl_strength': net.opts.get('bowl_strength', 0.0),
+            'bowl_center': net.opts.get('bowl_center', 0.5),
+            'm': net.opts.get('m', 1.0),  # Role-filling constraint strength
+            'scale_constants': jnp.array(net.scale_constants) if hasattr(net, 'scale_constants') else jnp.ones(net.num_bindings),
         }
         return params
 
