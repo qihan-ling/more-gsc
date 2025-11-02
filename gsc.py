@@ -2110,6 +2110,7 @@ if JAX_AVAILABLE:
             WC = net_params['WC']
             bC = net_params['bC']
             S = net_params['S']
+            C = net_params['C']  # Basis change matrix
             scale_constants = net_params['scale_constants']
             bowl_strength = float(net_params['bowl_strength'])  # Ensure scalar
             bowl_center = float(net_params['bowl_center'])      # Ensure scalar
@@ -2151,9 +2152,15 @@ if JAX_AVAILABLE:
             # Euler integration
             actC = actC + dt * gradC
 
-            # Add noise
-            noise = jax.random.normal(step_rng, actC.shape) * jnp.sqrt(2 * T * dt)
-            actC = actC + noise
+            # ===================================================================
+            # CRITICAL: Add noise correctly
+            # ===================================================================
+            # CPU version: noise in neural space, transform to conceptual via C matrix
+            # noise = sqrt(2*T*dt) * randn(num_units)
+            # noiseC = sqrt(scale_constants) * C.dot(noise)
+            noise_neural = jax.random.normal(step_rng, (net_params['num_units'],)) * jnp.sqrt(2 * T * dt)
+            noiseC = jnp.sqrt(scale_constants) * (C @ noise_neural)
+            actC = actC + noiseC
 
             # Update q
             q = q + net_params['q_rate'] * dt
@@ -2184,6 +2191,7 @@ if JAX_AVAILABLE:
             'num_bindings': net.num_bindings,
             'num_roles': net.num_roles,
             'num_fillers': net.num_fillers,
+            'num_units': net.num_units,  # Neural space dimension
             'WC': jnp.array(net.WC),
             'bC': jnp.array(net.bC),
             'estr': jnp.array(net.estr),
@@ -2197,6 +2205,7 @@ if JAX_AVAILABLE:
             'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
             # Critical parameters for correct gradient computation
             'S': jnp.array(net.S),  # Inverse similarity matrix
+            'C': jnp.array(net.C),  # Basis change matrix (neural -> conceptual)
             'bowl_strength': net.opts.get('bowl_strength', 0.0),
             'bowl_center': net.opts.get('bowl_center', 0.5),
             'm': net.opts.get('m', 1.0),  # Role-filling constraint strength
