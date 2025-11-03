@@ -2067,6 +2067,53 @@ class HarmonicGrammar():
 
 if JAX_AVAILABLE:
 
+    def _build_filler_type_map(net):
+        """
+        Precompute mapping from filler base types to all matching fillers.
+
+        This is needed because JAX can't call Python methods during JIT compilation.
+        The CPU version's set_input() expands types dynamically, but JAX needs
+        a precomputed mapping.
+
+        Args:
+            net: GscNet instance
+
+        Returns:
+            dict: Mapping from base filler type (e.g., 'N:0') to list of matching
+                  filler names (e.g., ['N:0', '*N:0', '#N:0'])
+        """
+        filler_type_map = {}
+        g = net.hg.g
+
+        # Build mapping for each unique filler type
+        seen_types = set()
+        for filler in net.filler_names:
+            # Get the base type (remove brackets, copy symbols, pos markers)
+            base_type = g.get_types([filler],
+                                   ignore_copy=True,
+                                   ignore_bracket=True,
+                                   ignore_pos_f=g.opts['use_pos_f'])[0]
+
+            if base_type in seen_types:
+                continue
+            seen_types.add(base_type)
+
+            # Find all fillers matching this type
+            fi_list = g.find_fillers_type(base_type,
+                                         ignore_bracket=True,
+                                         ignore_copy=True,
+                                         ignore_pos_f=g.opts['use_pos_f'])
+
+            matching_fillers = g.get_fillers(fi_list)
+
+            # Filter out copy symbols if requested (matching CPU behavior)
+            copy_symbol = g.opts.get('copy', '@')
+            matching_fillers = [f for f in matching_fillers if copy_symbol not in f]
+
+            filler_type_map[base_type] = matching_fillers
+
+        return filler_type_map
+
     def _compute_scale_constants_jax(pos, net_params):
         """
         Compute scale_constants for role masking based on word position.
@@ -2114,29 +2161,45 @@ if JAX_AVAILABLE:
 
     def _compute_external_input_jax(binding_name, net_params):
         """
-        Compute external input extC for a given binding name.
+        Compute external input extC for a given binding name with type expansion.
+
+        Matches CPU behavior: expands filler types to all matching fillers.
+        For example, 'N:0/(1,1)' expands to ['N:0/(1,1)', '*N:0/(1,1)', '#N:0/(1,1)', ...]
 
         Args:
             binding_name: String like "N:0/(1,1)"
-            net_params: Dictionary containing binding_names list and estr
+            net_params: Dictionary containing binding_names, estr, filler_type_map
 
         Returns:
-            extC: Array of shape (num_bindings,) with input at specified binding
+            extC: Array of shape (num_bindings,) with input at specified bindings
         """
         num_bindings = net_params['num_bindings']
         binding_names = net_params['binding_names']
         estr = net_params['estr']
+        filler_type_map = net_params['filler_type_map']
+        bsep = net_params['bsep']
 
-        # Find binding index
-        try:
-            binding_idx = binding_names.index(binding_name)
-        except ValueError:
-            # Binding not found, return zero input
-            return jnp.zeros(num_bindings)
-
-        # Create external input
         extC = jnp.zeros(num_bindings)
-        extC = extC.at[binding_idx].set(estr)
+
+        # Split binding name into filler and role
+        try:
+            filler, role = binding_name.split(bsep)
+        except ValueError:
+            # Invalid format, return zero input
+            return extC
+
+        # Get all fillers matching this type
+        matching_fillers = filler_type_map.get(filler, [filler])
+
+        # Set external input for all matching bindings
+        for matching_filler in matching_fillers:
+            expanded_binding = matching_filler + bsep + role
+            try:
+                idx = binding_names.index(expanded_binding)
+                extC = extC.at[idx].set(estr)
+            except ValueError:
+                # Binding not found, skip
+                pass
 
         return extC
 
@@ -2284,6 +2347,9 @@ if JAX_AVAILABLE:
                 lv, pos = net.hg.roles.str2tuple(rname)
                 role_names_tuples.append((lv, pos))
 
+        # Build filler type map for external input type expansion
+        filler_type_map = _build_filler_type_map(net)
+
         params = {
             'num_bindings': net.num_bindings,
             'num_roles': net.num_roles,
@@ -2314,6 +2380,7 @@ if JAX_AVAILABLE:
             'scale_type': net.opts.get('scale_type', 'diagonal'),
             'scaling_factor': net.opts.get('scaling_factor', 1.0),
             'update_scale_constants': net.train_opts.get('update_scale_constants', False),
+            'filler_type_map': filler_type_map,  # Filler type expansion mapping
         }
         return params
 
