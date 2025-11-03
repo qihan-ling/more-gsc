@@ -21,10 +21,8 @@ print("\n1. Running CPU version...")
 net.reset()
 net.run_prefix(prefix)
 net.run_wrapup()
-cpu_tree = net.read_grid_point()
-cpu_tree_str = net.gridpoint2tree(cpu_tree)
-print(f"   CPU tree: {cpu_tree_str}")
-print(f"   CPU grid point: {cpu_tree}")
+cpu_grid = net.read_grid_point()  # Returns list of "filler/role" strings
+print(f"   CPU grid point: {cpu_grid}")
 
 # Run JAX version (single trial for comparison)
 if gsc.JAX_AVAILABLE:
@@ -38,19 +36,20 @@ if gsc.JAX_AVAILABLE:
     rng_key = jax.random.PRNGKey(42)
     actC_jax, grid_point_jax = gsc._run_single_trial_jax(rng_key, net_params, prefix, False)
 
-    # Convert to tree string
+    # Convert JAX grid point (filler indices per role) to binding names
     grid_point_np = np.array(grid_point_jax)
-    jax_tree_str = net.gridpoint2tree(grid_point_np)
-    print(f"   JAX tree: {jax_tree_str}")
-    print(f"   JAX grid point: {grid_point_np}")
+    jax_grid = [f"{net.filler_names[int(fi)]}/{net.role_names[ri]}"
+                for ri, fi in enumerate(grid_point_np)]
+    print(f"   JAX grid point: {jax_grid}")
 
     # Compare
     print("\n3. Comparison:")
-    if np.array_equal(cpu_tree, grid_point_np):
+    if cpu_grid == jax_grid:
         print("   ✓ Grid points MATCH!")
     else:
         print("   ✗ Grid points differ (expected due to different RNG)")
-        print(f"   Difference: {np.sum(cpu_tree != grid_point_np)} out of {len(cpu_tree)} roles")
+        matches = sum(1 for c, j in zip(cpu_grid, jax_grid) if c == j)
+        print(f"   Matches: {matches}/{len(cpu_grid)} roles")
 else:
     print("\nJAX not available - skipping JAX test")
 
@@ -64,9 +63,12 @@ if gsc.JAX_AVAILABLE:
     cpu_stat, cpu_actC_list = net.estimate_prob_inc(prefix, num_trials=10)
     cpu_time = time.time() - t0
     print(f"   Time: {cpu_time:.3f}s")
-    print(f"   Unique trees: {len(cpu_stat['tree'])}")
-    for i, tree in enumerate(cpu_stat['tree'][:3]):  # Show first 3
-        print(f"     {i+1}. p={cpu_stat['prob'][i]:.3f}: {tree}")
+    print(f"   Unique trees: {len(cpu_stat['trees'])}")
+
+    # Show first 3 trees
+    for i, (tree_key, prob) in enumerate(list(cpu_stat['trees'].items())[:3]):
+        tree_bindings = [net.binding_names[idx] for idx in tree_key]
+        print(f"     {i+1}. p={prob:.3f}: {len(tree_bindings)} bindings")
 
     # Run JAX version
     print("\n   JAX version (10 trials):")
@@ -74,9 +76,12 @@ if gsc.JAX_AVAILABLE:
     jax_stat, jax_actC_list = net.estimate_prob_inc_jax(prefix, num_trials=10, rng_seed=42)
     jax_time = time.time() - t0
     print(f"   Time: {jax_time:.3f}s")
-    print(f"   Unique trees: {len(jax_stat['tree'])}")
-    for i, tree in enumerate(jax_stat['tree'][:3]):  # Show first 3
-        print(f"     {i+1}. p={jax_stat['prob'][i]:.3f}: {tree}")
+    print(f"   Unique trees: {len(jax_stat['trees'])}")
+
+    # Show first 3 trees
+    for i, (tree_key, prob) in enumerate(list(jax_stat['trees'].items())[:3]):
+        tree_bindings = [net.binding_names[idx] for idx in tree_key]
+        print(f"     {i+1}. p={prob:.3f}: {len(tree_bindings)} bindings")
 
     print(f"\n   Speedup: {cpu_time/jax_time:.2f}×")
 
