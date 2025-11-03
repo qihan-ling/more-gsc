@@ -13,6 +13,18 @@ import copy
 import time
 from matplotlib.patches import Rectangle
 
+# JAX imports for GPU acceleration
+try:
+    import jax
+    import jax.numpy as jnp
+    from jax import vmap, jit
+    from functools import partial
+    JAX_AVAILABLE = True
+    print("JAX detected - GPU acceleration enabled")
+except ImportError:
+    JAX_AVAILABLE = False
+    print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
+
 
 class Node():
     # Class PCFG uses this Node class to represent a binary tree structure
@@ -2046,6 +2058,346 @@ class HarmonicGrammar():
         self.binding_names = [f + self.opts['bsep'] + r
                               for r in self.role_names
                               for f in self.filler_names]
+
+
+# =============================================================================
+# JAX-ACCELERATED TRIAL EXECUTION
+# =============================================================================
+# These functions enable GPU-accelerated parallel trial execution
+
+if JAX_AVAILABLE:
+
+    def _build_filler_type_map(net):
+        """
+        Precompute mapping from filler base types to all matching fillers.
+
+        This is needed because JAX can't call Python methods during JIT compilation.
+        The CPU version's set_input() expands types dynamically, but JAX needs
+        a precomputed mapping.
+
+        Args:
+            net: GscNet instance
+
+        Returns:
+            dict: Mapping from base filler type (e.g., 'N:0') to list of matching
+                  filler names (e.g., ['N:0', '*N:0', '#N:0'])
+        """
+        filler_type_map = {}
+        g = net.hg.g
+
+        # Build mapping for each unique filler type
+        seen_types = set()
+        for filler in net.filler_names:
+            # Get the base type (remove brackets, copy symbols, pos markers)
+            base_type = g.get_types([filler],
+                                   ignore_copy=True,
+                                   ignore_bracket=True,
+                                   ignore_pos_f=g.opts['use_pos_f'])[0]
+
+            if base_type in seen_types:
+                continue
+            seen_types.add(base_type)
+
+            # Find all fillers matching this type
+            fi_list = g.find_fillers_type(base_type,
+                                         ignore_bracket=True,
+                                         ignore_copy=True,
+                                         ignore_pos_f=g.opts['use_pos_f'])
+
+            matching_fillers = g.get_fillers(fi_list)
+
+            # Filter out copy symbols if requested (matching CPU behavior)
+            copy_symbol = g.opts.get('copy', '@')
+            matching_fillers = [f for f in matching_fillers if copy_symbol not in f]
+
+            filler_type_map[base_type] = matching_fillers
+
+        return filler_type_map
+
+
+    def _compute_scale_constants_jax(pos, net_params):
+        """
+        Compute scale_constants for role masking based on word position.
+
+        Args:
+            pos: Word position (0 for wrapup, 1+ for prefix words)
+            net_params: Dictionary containing role information
+
+        Returns:
+            scale_constants: Array of shape (num_bindings,) with exponential weights
+        """
+        num_bindings = net_params['num_bindings']
+        num_roles = net_params['num_roles']
+        num_fillers = net_params['num_fillers']
+
+        if pos == 0:
+            # Wrapup: all roles active
+            return jnp.ones(num_bindings)
+
+        # Get parameters
+        scale_type = net_params.get('scale_type', 'diagonal')
+        scaling_factor = net_params.get('scaling_factor', 1.0)
+        role_names_tuples = net_params['role_names_tuples']  # List of (lv, pos) tuples
+
+        # Convert to JAX arrays for vectorized operations
+        lv_array = jnp.array([t[0] for t in role_names_tuples])  # Level for each role
+        pos_array = jnp.array([t[1] for t in role_names_tuples])  # Position for each role
+
+        # Compute weight for each role
+        if scale_type == 'diagonal':
+            # Symmetric diagonal weighting
+            role_weights = jnp.exp(-jnp.abs(lv_array + pos_array - (pos + 1)) * scaling_factor)
+        elif scale_type == 'pos':
+            # Position-based weighting
+            role_weights = jnp.exp(-jnp.abs(pos_array - pos) * scaling_factor)
+        else:
+            role_weights = jnp.ones(num_roles)
+
+        # Expand role weights to binding weights
+        # Each role's weight applies to all its fillers
+        # weights[ri * num_fillers : (ri+1) * num_fillers] = role_weights[ri]
+        weights = jnp.repeat(role_weights, num_fillers)
+
+        return weights
+
+    def _compute_external_input_jax(binding_name, net_params):
+        """
+        Compute external input extC for a given binding name with type expansion.
+
+        Matches CPU behavior: expands filler types to all matching fillers.
+        For example, 'N:0/(1,1)' expands to ['N:0/(1,1)', '*N:0/(1,1)', '#N:0/(1,1)', ...]
+
+        Args:
+            binding_name: String like "N:0/(1,1)"
+            net_params: Dictionary containing binding_names list, estr, filler_type_map
+
+        Returns:
+            extC: Array of shape (num_bindings,) with input at specified binding
+        """
+        num_bindings = net_params['num_bindings']
+        binding_names = net_params['binding_names']
+        estr = net_params['estr']
+
+        filler_type_map = net_params['filler_type_map']
+        bsep = net_params['bsep']
+
+        extC = jnp.zeros(num_bindings)
+
+        # Split binding name into filler and role
+        try:
+            filler, role = binding_name.split(bsep)
+        except ValueError:
+            # Binding not found, return zero input
+            return extC
+
+        # Get all fillers matching this type
+        matching_fillers = filler_type_map.get(filler, [filler])
+
+        # Set external input for all matching bindings
+        for matching_filler in matching_fillers:
+            expanded_binding = matching_filler + bsep + role
+            try:
+                idx = binding_names.index(expanded_binding)
+                extC = extC.at[idx].set(estr)
+            except ValueError:
+                # Binding not found, skip
+                pass
+
+        return extC
+
+    def _run_single_trial_jax(rng_key, net_params, prefix, update_q_discrete):
+        """
+        Pure functional version of a single trial for JAX.
+
+        Args:
+            rng_key: JAX random key for this trial
+            net_params: Dictionary containing network parameters and state
+            prefix: List of filler names for the prefix  (e.g., ['N:0', 'Vi:0'])
+            update_q_discrete: Boolean for q update mode
+
+        Returns:
+            actC: Final activation state (num_bindings,)
+            grid_point_indices: Grid point as filler indices per role (num_roles,)
+        """
+        # Initialize state with noise
+        rng_key, noise_key = jax.random.split(rng_key)
+        noise = jax.random.normal(noise_key, (net_params['num_bindings'],)) * net_params['init_noise_mag']
+        actC = net_params['ep'] + noise
+
+        # Initialize other state variables
+        q = jnp.ones(net_params['num_roles']) * net_params['q_init']
+        T = net_params['T_init']
+        dt = net_params['dt_init']
+
+        def dynamics_step(carry, _):
+            actC, q, T, rng, extC_val, scale_const, q_max_val = carry
+            # Split RNG for this step
+            rng, step_rng = jax.random.split(rng)
+
+            # Extract parameters
+            WC = net_params['WC']
+            bC = net_params['bC']
+            S = net_params['S']
+            C = net_params['C']
+            bowl_strength = float(net_params['bowl_strength'])
+            bowl_center = float(net_params['bowl_center'])
+            m = float(net_params['m'])
+
+
+            # Reshape actC to matrix form (fillers × roles)
+            actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
+
+            # ===================================================================
+            # Compute HGradC (Harmony gradient in conceptual coordinates)
+            # ===================================================================
+
+            # 1. Grammar component (weights + biases + external input)
+            hgrad_g = WC @ actC + bC + extC_val
+
+            # 2. Bowl constraints (attraction to bowl center)
+            hgrad_b = bowl_strength * (bowl_center - actC)
+
+            # 3. Commitment energy (q term) - pushes toward 0 or 1
+            q_extended = jnp.repeat(q, net_params['num_fillers'])
+            hgrad_q0 = -2 * q_extended * actC * (1 - actC) * (1 - 2 * actC)
+
+            # 4. Role-filling constraint - one filler per role
+            ssq = jnp.sum(actCmat ** 2, axis=0)
+            ssq_extended = jnp.repeat(ssq - 1, net_params['num_fillers'])
+            hgrad_q1 = -4 * m * actC * ssq_extended
+
+            # Combine and transform gradient components
+            HGradC_val = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
+
+            # ===================================================================
+            # CRITICAL: Apply S matrix and scale_constants
+            # ===================================================================
+            # This matches the original: gradC = scale_constants * S.dot(HGradC())
+            gradC = scale_const * (S @ HGradC_val)
+
+            # Euler integration
+            actC = actC + dt * gradC
+
+            # Add noise
+            # Add noise in neural space, transform to conceptual
+            noise_neural = jax.random.normal(step_rng, (net_params['num_units'],)) * jnp.sqrt(2 * T * dt)
+            noiseC = jnp.sqrt(scale_const) * (C @ noise_neural)
+            actC = actC + noiseC
+
+            # Update q
+            q = q + net_params['q_rate'] * dt
+            q = jnp.clip(q, 0, q_max_val)
+
+            return (actC, q, T, rng, extC_val, scale_const, q_max_val), None
+
+        # Process prefix words if any
+        if prefix is not None and len(prefix) > 0:
+            qpolicy = net_params['qpolicy']
+            bsep = net_params['bsep']
+            for wpos, fname in enumerate(prefix, start=1):
+                # Construct binding name
+                binding_name = f"{fname}{bsep}(1,{wpos})"
+                # Compute external input
+                extC = _compute_external_input_jax(binding_name, net_params)
+
+                # Compute scale_constants if enabled
+                if net_params['update_scale_constants']:
+                    scale_constants = _compute_scale_constants_jax(wpos, net_params)
+                else:
+                    scale_constants = jnp.ones(net_params['num_bindings'])
+
+                # Run dynamics loop
+                # Set q_max for this word
+                q_max_word = qpolicy[wpos]
+
+                # Calculate duration for this word
+                q_inc = qpolicy[wpos] - qpolicy[wpos - 1]
+                duration = jnp.max(q_inc) / net_params['q_rate']
+                num_steps = jnp.int32(jnp.ceil(duration / dt))
+
+                # Run dynamics for this prefix word
+                (actC, q, T, rng_key, _, _, _), _ = jax.lax.scan(
+                    dynamics_step,
+                    (actC, q, T, rng_key, extC, scale_constants, q_max_word),
+                    None,
+                    length=num_steps
+                )
+
+        # Wrapup phase: clear input, reset scale_constants, run to completion
+        extC_wrapup = jnp.zeros(net_params['num_bindings'])
+
+        if net_params['update_scale_constants']:
+            scale_constants_wrapup = _compute_scale_constants_jax(0, net_params)
+        else:
+            scale_constants_wrapup = jnp.ones(net_params['num_bindings'])
+
+        q_max_final = net_params['q_max']
+
+        # Calculate wrapup duration
+        duration_wrapup = jnp.max(q_max_final - q) / net_params['q_rate']
+        num_steps_wrapup = jnp.int32(jnp.ceil(duration_wrapup / dt))
+
+        # Run wrapup dynamics
+        (actC, q, T, rng_key, _, _, _), _ = jax.lax.scan(
+            dynamics_step,
+            (actC, q, T, rng_key, extC_wrapup, scale_constants_wrapup, q_max_final),
+            None,
+            length=num_steps_wrapup
+        )
+
+        # Extract grid point (argmax per role)
+        actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
+        grid_point = jnp.argmax(actCmat, axis=0)
+
+        return actC, grid_point
+
+    def _extract_net_params_for_jax(net):
+
+        # Extract role position tuples for scale_constants computation
+        role_names_tuples = []
+        if hasattr(net.hg, 'roles'):
+            for rname in net.role_names:
+                lv, pos = net.hg.roles.str2tuple(rname)
+                role_names_tuples.append((lv, pos))
+        # Build filler type map for external input type expansion
+        filler_type_map = _build_filler_type_map(net)
+        """Extract network parameters into a JAX-compatible dictionary."""
+        params = {
+            'num_bindings': net.num_bindings,
+            'num_roles': net.num_roles,
+            'num_fillers': net.num_fillers,
+            'num_units': net.num_units,
+            'WC': jnp.array(net.WC),
+            'bC': jnp.array(net.bC),
+            'estr': float(net.estr[0]) if hasattr(net.estr, '__len__') else float(net.estr),  # External input strength
+            'ep': jnp.array(net.ep),
+            'init_noise_mag': net.train_opts['init_noise_mag'],
+            'q_init': net.opts['q_init'],
+            'q_max': net.opts['q_max'],
+            'q_rate': net.opts.get('q_rate', 1.0),  # Default to 1.0 if not found
+            'dt_init': net.opts['dt_init'],
+            'T_init': net.opts['T_init'],
+            'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
+            # Critical parameters for correct gradient computation
+            'S': jnp.array(net.S),  # Inverse similarity matrix
+            'C': jnp.array(net.C),
+            'bowl_strength': net.opts.get('bowl_strength', 0.0),
+            'bowl_center': net.opts.get('bowl_center', 0.5),
+            'm': net.opts.get('m', 1.0),  # Role-filling constraint strength
+            'scale_constants': jnp.array(net.scale_constants) if hasattr(net, 'scale_constants') else jnp.ones(net.num_bindings),
+            # For prefix handling
+            'binding_names': net.binding_names,  # List of binding name strings
+            'bsep': net.hg.opts['bsep'] if hasattr(net.hg, 'opts') else '/',  # Binding separator
+            'role_names_tuples': role_names_tuples,  # List of (lv, pos) tuples
+            'scale_type': net.opts.get('scale_type', 'diagonal'),
+            'scaling_factor': net.opts.get('scaling_factor', 1.0),
+            'update_scale_constants': net.train_opts.get('update_scale_constants', False),
+            'filler_type_map': filler_type_map,  # Filler type expansion mapping
+        }
+        return params
+
+    # Create batched version using vmap
+    _run_trials_batched_jax = vmap(_run_single_trial_jax, in_axes=(0, None, None, None))
 
 
 class GscNet():
@@ -4664,7 +5016,7 @@ class GscNet():
             corpus[key] = [self.corpus[key][si]
                            for si in range(nsent)
                            if si in idx]
-            if key is not 'sentence':
+            if key != 'sentence':
                 corpus[key] = np.array(corpus[key])
 
         # Normalize probabilities
@@ -5440,6 +5792,87 @@ class GscNet():
 
         # self.actC_list = np.array(self.actC_list)
         # self.prob_bindings = actC_mean / num_trials
+
+    def estimate_prob_inc_jax(self, prefix, num_trials=40, progress=0, update_q_discrete=False, rng_seed=None):
+        """
+        JAX-accelerated version of estimate_prob_inc.
+
+        Runs all trials in parallel on GPU for massive speedup.
+        Falls back to original CPU version if JAX is not available.
+
+        Args:
+            prefix: List of filler names for the prefix
+            num_trials: Number of trials to run in parallel
+            progress: Progress reporting interval
+            update_q_discrete: Boolean for q update mode
+            rng_seed: Random seed for reproducibility
+
+        Returns:
+            stat: Corpus statistics (same format as original)
+            actC_list: Array of activation states (num_trials, num_bindings)
+        """
+        if not JAX_AVAILABLE:
+            print("JAX not available, falling back to CPU version")
+            return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
+
+        print(f"Running {num_trials} trials in parallel on GPU...")
+        t0 = time.time()
+
+        # Extract network parameters for JAX
+        net_params = _extract_net_params_for_jax(self)
+
+        # Generate random keys for each trial
+        if rng_seed is None:
+            rng_seed = np.random.randint(0, 1000000)
+        rng = jax.random.PRNGKey(rng_seed)
+        rng_keys = jax.random.split(rng, num_trials)
+
+        # Run all trials in parallel on GPU
+        actC_batch, grid_point_batch = _run_trials_batched_jax(
+            rng_keys, net_params, prefix, update_q_discrete
+        )
+
+        # Convert back to numpy for compatibility with existing code
+        actC_batch = np.array(actC_batch)
+        grid_point_batch = np.array(grid_point_batch)
+
+        print(f"GPU execution time: {time.time() - t0:.3f}s")
+
+        # Process results (same as original - aggregate unique states)
+        # CRITICAL FIX: Use grid points (discrete) not continuous actC for aggregation
+        # Convert grid point indices to one-hot actC vectors (like CPU version does)
+        corpus = {}
+        corpus['target'] = []
+        corpus['count'] = []
+        corpus['prob_sent'] = []
+        actC_list = []
+
+        for trial_id in range(num_trials):
+            # Store continuous actC for return value
+            actC_list.append(list(actC_batch[trial_id]))
+            # Convert grid point (filler indices per role) to one-hot actC
+            grid_point = grid_point_batch[trial_id]
+            actC_discrete = np.zeros(self.num_bindings)
+            for role_idx, filler_idx in enumerate(grid_point):
+                # the binding name ordering is binding_names = [f + bsep + r for r in self.role_names for f in self.filler_names]
+                # = [f0/r0, f1/r0, f2/r0, ..., f0/r1, f1/r1, ...]
+                binding_idx = role_idx * self.num_fillers + int(filler_idx)
+                actC_discrete[binding_idx] = 1.0
+
+            # Aggregate using discrete states (like CPU version)
+            if list(actC_discrete) not in corpus['target']:
+                corpus['target'].append(list(actC_discrete))
+                corpus['count'].append(1)
+            else:
+                idx = corpus['target'].index(list(actC_discrete))
+                corpus['count'][idx] += 1
+
+        corpus['target'] = np.array(corpus['target'])
+        corpus['count'] = np.array(corpus['count'])
+        corpus['prob_sent'] = corpus['count'] / corpus['count'].sum()
+
+        stat = self.get_corpus_stat(corpus)
+        return stat, np.array(actC_list)
 
     def ema_stat(self, stat_new, stat_old, weight=None):
 
