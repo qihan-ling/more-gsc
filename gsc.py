@@ -5838,38 +5838,60 @@ class GscNet():
 
         print(f"GPU execution time: {time.time() - t0:.3f}s")
 
-        # Process results (same as original - aggregate unique states)
+        # Process results - OPTIMIZED VERSION
         # CRITICAL FIX: Use grid points (discrete) not continuous actC for aggregation
         # Convert grid point indices to one-hot actC vectors (like CPU version does)
+
+        t_post = time.time()
+
+        # Store continuous actC for return value
+        actC_list = actC_batch.tolist()  # Fast batch conversion
+
+        # OPTIMIZATION 1: Vectorized one-hot encoding
+        # Instead of looping, use advanced indexing
+        # grid_point_batch shape: (num_trials, num_roles)
+        # We want: actC_discrete[trial, role_idx * num_fillers + filler_idx] = 1.0
+
+        actC_discrete_batch = np.zeros((num_trials, self.num_bindings))
+        role_indices = np.arange(self.num_roles)  # [0, 1, 2, ..., num_roles-1]
+
+        for trial_id in range(num_trials):
+            binding_indices = role_indices * self.num_fillers + grid_point_batch[trial_id].astype(int)
+            actC_discrete_batch[trial_id, binding_indices] = 1.0
+
+        # OPTIMIZATION 2: Use dictionary with tuple keys for O(1) lookup
+        # Instead of list membership testing and list.index() which are O(n)
+
+        state_counts = {}  # {tuple(grid_point): count}
+
+        for trial_id in range(num_trials):
+            # Use grid_point as hashable key (faster than comparing full one-hot vectors)
+            gp_key = tuple(grid_point_batch[trial_id])
+
+            if gp_key in state_counts:
+                state_counts[gp_key] += 1
+            else:
+                state_counts[gp_key] = 1
+
+        # Convert to corpus format
         corpus = {}
         corpus['target'] = []
         corpus['count'] = []
-        corpus['prob_sent'] = []
-        actC_list = []
 
-        for trial_id in range(num_trials):
-            # Store continuous actC for return value
-            actC_list.append(list(actC_batch[trial_id]))
-            # Convert grid point (filler indices per role) to one-hot actC
-            grid_point = grid_point_batch[trial_id]
+        for gp_key, count in state_counts.items():
+            # Reconstruct one-hot from grid_point
             actC_discrete = np.zeros(self.num_bindings)
-            for role_idx, filler_idx in enumerate(grid_point):
-                # the binding name ordering is binding_names = [f + bsep + r for r in self.role_names for f in self.filler_names]
-                # = [f0/r0, f1/r0, f2/r0, ..., f0/r1, f1/r1, ...]
+            for role_idx, filler_idx in enumerate(gp_key):
                 binding_idx = role_idx * self.num_fillers + int(filler_idx)
                 actC_discrete[binding_idx] = 1.0
-
-            # Aggregate using discrete states (like CPU version)
-            if list(actC_discrete) not in corpus['target']:
-                corpus['target'].append(list(actC_discrete))
-                corpus['count'].append(1)
-            else:
-                idx = corpus['target'].index(list(actC_discrete))
-                corpus['count'][idx] += 1
+            corpus['target'].append(list(actC_discrete))
+            corpus['count'].append(count)
 
         corpus['target'] = np.array(corpus['target'])
         corpus['count'] = np.array(corpus['count'])
         corpus['prob_sent'] = corpus['count'] / corpus['count'].sum()
+
+        print(f"Post-processing time: {time.time() - t_post:.3f}s")
 
         stat = self.get_corpus_stat(corpus)
         return stat, np.array(actC_list)
