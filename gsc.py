@@ -2090,9 +2090,9 @@ if JAX_AVAILABLE:
         for filler in net.filler_names:
             # Get the base type (remove brackets, copy symbols, pos markers)
             base_type = g.get_types([filler],
-                                   ignore_copy=True,
-                                   ignore_bracket=True,
-                                   ignore_pos_f=g.opts['use_pos_f'])[0]
+                                    ignore_copy=True,
+                                    ignore_bracket=True,
+                                    ignore_pos_f=g.opts['use_pos_f'])[0]
 
             if base_type in seen_types:
                 continue
@@ -2100,20 +2100,20 @@ if JAX_AVAILABLE:
 
             # Find all fillers matching this type
             fi_list = g.find_fillers_type(base_type,
-                                         ignore_bracket=True,
-                                         ignore_copy=True,
-                                         ignore_pos_f=g.opts['use_pos_f'])
+                                          ignore_bracket=True,
+                                          ignore_copy=True,
+                                          ignore_pos_f=g.opts['use_pos_f'])
 
             matching_fillers = g.get_fillers(fi_list)
 
             # Filter out copy symbols if requested (matching CPU behavior)
             copy_symbol = g.opts.get('copy', '@')
-            matching_fillers = [f for f in matching_fillers if copy_symbol not in f]
+            matching_fillers = [
+                f for f in matching_fillers if copy_symbol not in f]
 
             filler_type_map[base_type] = matching_fillers
 
         return filler_type_map
-
 
     def _compute_scale_constants_jax(pos, net_params):
         """
@@ -2137,16 +2137,20 @@ if JAX_AVAILABLE:
         # Get parameters
         scale_type = net_params.get('scale_type', 'diagonal')
         scaling_factor = net_params.get('scaling_factor', 1.0)
-        role_names_tuples = net_params['role_names_tuples']  # List of (lv, pos) tuples
+        # List of (lv, pos) tuples
+        role_names_tuples = net_params['role_names_tuples']
 
         # Convert to JAX arrays for vectorized operations
-        lv_array = jnp.array([t[0] for t in role_names_tuples])  # Level for each role
-        pos_array = jnp.array([t[1] for t in role_names_tuples])  # Position for each role
+        # Level for each role
+        lv_array = jnp.array([t[0] for t in role_names_tuples])
+        # Position for each role
+        pos_array = jnp.array([t[1] for t in role_names_tuples])
 
         # Compute weight for each role
         if scale_type == 'diagonal':
             # Symmetric diagonal weighting
-            role_weights = jnp.exp(-jnp.abs(lv_array + pos_array - (pos + 1)) * scaling_factor)
+            role_weights = jnp.exp(-jnp.abs(lv_array +
+                                   pos_array - (pos + 1)) * scaling_factor)
         elif scale_type == 'pos':
             # Position-based weighting
             role_weights = jnp.exp(-jnp.abs(pos_array - pos) * scaling_factor)
@@ -2221,7 +2225,8 @@ if JAX_AVAILABLE:
         """
         # Initialize state with noise
         rng_key, noise_key = jax.random.split(rng_key)
-        noise = jax.random.normal(noise_key, (net_params['num_bindings'],)) * net_params['init_noise_mag']
+        noise = jax.random.normal(
+            noise_key, (net_params['num_bindings'],)) * net_params['init_noise_mag']
         actC = net_params['ep'] + noise
 
         # Initialize other state variables
@@ -2243,9 +2248,9 @@ if JAX_AVAILABLE:
             bowl_center = float(net_params['bowl_center'])
             m = float(net_params['m'])
 
-
             # Reshape actC to matrix form (fillers × roles)
-            actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
+            actCmat = actC.reshape(
+                (net_params['num_fillers'], net_params['num_roles']), order='F')
 
             # ===================================================================
             # Compute HGradC (Harmony gradient in conceptual coordinates)
@@ -2280,7 +2285,8 @@ if JAX_AVAILABLE:
 
             # Add noise
             # Add noise in neural space, transform to conceptual
-            noise_neural = jax.random.normal(step_rng, (net_params['num_units'],)) * jnp.sqrt(2 * T * dt)
+            noise_neural = jax.random.normal(
+                step_rng, (net_params['num_units'],)) * jnp.sqrt(2 * T * dt)
             noiseC = jnp.sqrt(scale_const) * (C @ noise_neural)
             actC = actC + noiseC
 
@@ -2302,7 +2308,8 @@ if JAX_AVAILABLE:
 
                 # Compute scale_constants if enabled
                 if net_params['update_scale_constants']:
-                    scale_constants = _compute_scale_constants_jax(wpos, net_params)
+                    scale_constants = _compute_scale_constants_jax(
+                        wpos, net_params)
                 else:
                     scale_constants = jnp.ones(net_params['num_bindings'])
 
@@ -2327,7 +2334,8 @@ if JAX_AVAILABLE:
         extC_wrapup = jnp.zeros(net_params['num_bindings'])
 
         if net_params['update_scale_constants']:
-            scale_constants_wrapup = _compute_scale_constants_jax(0, net_params)
+            scale_constants_wrapup = _compute_scale_constants_jax(
+                0, net_params)
         else:
             scale_constants_wrapup = jnp.ones(net_params['num_bindings'])
 
@@ -2346,7 +2354,8 @@ if JAX_AVAILABLE:
         )
 
         # Extract grid point (argmax per role)
-        actCmat = actC.reshape((net_params['num_fillers'], net_params['num_roles']), order='F')
+        actCmat = actC.reshape(
+            (net_params['num_fillers'], net_params['num_roles']), order='F')
         grid_point = jnp.argmax(actCmat, axis=0)
 
         return actC, grid_point
@@ -2369,12 +2378,14 @@ if JAX_AVAILABLE:
             'num_units': net.num_units,
             'WC': jnp.array(net.WC),
             'bC': jnp.array(net.bC),
-            'estr': float(net.estr[0]) if hasattr(net.estr, '__len__') else float(net.estr),  # External input strength
+            # External input strength
+            'estr': float(net.estr[0]) if hasattr(net.estr, '__len__') else float(net.estr),
             'ep': jnp.array(net.ep),
             'init_noise_mag': net.train_opts['init_noise_mag'],
             'q_init': net.opts['q_init'],
             'q_max': net.opts['q_max'],
-            'q_rate': net.opts.get('q_rate', 1.0),  # Default to 1.0 if not found
+            # Default to 1.0 if not found
+            'q_rate': net.opts.get('q_rate', 1.0),
             'dt_init': net.opts['dt_init'],
             'T_init': net.opts['T_init'],
             'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
@@ -2387,7 +2398,8 @@ if JAX_AVAILABLE:
             'scale_constants': jnp.array(net.scale_constants) if hasattr(net, 'scale_constants') else jnp.ones(net.num_bindings),
             # For prefix handling
             'binding_names': net.binding_names,  # List of binding name strings
-            'bsep': net.hg.opts['bsep'] if hasattr(net.hg, 'opts') else '/',  # Binding separator
+            # Binding separator
+            'bsep': net.hg.opts['bsep'] if hasattr(net.hg, 'opts') else '/',
             'role_names_tuples': role_names_tuples,  # List of (lv, pos) tuples
             'scale_type': net.opts.get('scale_type', 'diagonal'),
             'scaling_factor': net.opts.get('scaling_factor', 1.0),
@@ -2397,7 +2409,8 @@ if JAX_AVAILABLE:
         return params
 
     # Create batched version using vmap
-    _run_trials_batched_jax = vmap(_run_single_trial_jax, in_axes=(0, None, None, None))
+    _run_trials_batched_jax = vmap(
+        _run_single_trial_jax, in_axes=(0, None, None, None))
 
 
 class GscNet():
@@ -6478,9 +6491,13 @@ class GscNet():
 
                     stat_P = self.get_corpus_stat(
                         self.subset_corpus(prefix_bnames))
-                    stat_Q, actC_set = self.estimate_prob_inc(
-                        prefix=prefix, num_trials=self.train_opts['num_trials'])
-
+                    # TEST: change estimate_prob_inc to estimate_prob_inc_jax
+                    if JAX_AVAILABLE:
+                        stat_Q, actC_set = self.estimate_prob_inc_jax(
+                            prefix=prefix, num_trials=self.train_opts['num_trials'])
+                    else:
+                        stat_Q, actC_set = self.estimate_prob_inc(
+                            prefix=prefix, num_trials=self.train_opts['num_trials'])
                     if self.train_opts['ema_stat_weight'] > 0:
                         if hasattr(self, 'stat_Q_prev'):
                             stat_Q_new = self.ema_stat(
@@ -7204,7 +7221,7 @@ def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0
     plt.tight_layout()
     if savefilename_prefix is not None:
         plt.savefig(savefilename_prefix + '-kl.pdf')
-    plt.show()
+    # plt.show()
 
     # Plot accuracy
     xval = np.arange(len(net.traces_train['acc'])) * nsent_per_iteration
@@ -7221,7 +7238,7 @@ def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0
     plt.tight_layout()
     if savefilename_prefix is not None:
         plt.savefig(savefilename_prefix + '-acc.pdf')
-    plt.show()
+    # plt.show()
 
     if savefilename_prefix is None:
         savefilename = None
@@ -7289,7 +7306,7 @@ def plot_prob_trees_trace(
     plt.tight_layout()
     if savefilename is not None:
         plt.savefig(savefilename)
-    plt.show()
+    # plt.show()
 
 
 def parse(net, estr=2, slen=None, apply_time_constant=False, null1=False,
