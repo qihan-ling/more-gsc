@@ -1,7 +1,29 @@
 import matplotlib.pyplot as plt
 import gsc
 import numpy as np
-
+'''
+PCFG_G2 =
+0.35 S -> N Vi
+0.40 S -> N VP
+0.05 S -> NP Vi
+0.05 S -> N VPt
+0.05 S -> NP AdvP
+0.10 S -> NP AdvP
+0.2 NP -> N RC
+0.8 NP -> Det N
+0.8 AdvP -> Adv RC
+0.2 AdvP -> Adv VPt
+0.6 VPt -> Vt N
+0.3 VPt -> Vt NP
+0.1 VPt -> Vt PP
+1.0 RC -> Vpp PP
+1.0 VPpp -> Vpp PP
+0.7 PP -> P N
+0.3 PP -> P NP
+0.5 VP -> Vi PP
+0.3 VP -> BE Vpp
+0.2 VP -> BE VPpp
+'''
 # ============================================================================
 # Grammar 1 (G1) from Section 4.1
 # ============================================================================
