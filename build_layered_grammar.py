@@ -162,6 +162,112 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
     return kept_rules, layer_info
 
 
+def normalize_without_collapse(rules, min_prob=1e-10, cumulative_threshold=0.95):
+    """
+    Normalize probabilities WITHOUT collapsing subscripts.
+
+    Keeps Berkeley Parser's latent subcategorization (S_1, S_2, etc.)
+    but still normalizes and applies threshold filtering.
+
+    Args:
+        rules: List of (prob, mother, daughter1, daughter2) tuples
+        min_prob: Minimum probability threshold
+        cumulative_threshold: Keep top rules until this cumulative probability
+
+    Returns:
+        Normalized grammar string in GSC format (with subscripts preserved)
+    """
+    print(f"\nNormalizing without collapsing subscripts...")
+    print(f"  Keeping Berkeley Parser latent subcategorization")
+
+    # Group rules by exact mother (including subscript)
+    # This preserves S_1, S_2, etc. as separate categories
+    lhs_groups = defaultdict(list)
+    for prob, mother, d1, d2 in rules:
+        lhs_groups[mother].append((prob, d1, d2))
+
+    print(f"  LHS categories (with subscripts): {len(lhs_groups)}")
+
+    # Normalize each LHS group
+    normalized_rules = {}
+    for lhs, rule_list in lhs_groups.items():
+        total = sum(p for p, _, _ in rule_list)
+        for prob, d1, d2 in rule_list:
+            normalized_prob = prob / total if total > 0 else 0.0
+            rule = f"{lhs} -> {d1} {d2}"
+            normalized_rules[rule] = normalized_prob
+
+    print(f"  Normalized rules: {len(normalized_rules)}")
+
+    # Apply cumulative probability threshold per LHS
+    print(f"\nApplying cumulative threshold ({cumulative_threshold:.1%})...")
+
+    lhs_groups_filtered = defaultdict(list)
+    for rule, prob in normalized_rules.items():
+        lhs, rhs = rule.split(' -> ', 1)
+        lhs_groups_filtered[lhs].append((rhs, prob))
+
+    # For each LHS, keep only top rules until cumulative threshold
+    selected_rules = {}
+    total_removed = 0
+
+    for lhs, rhs_prob_list in lhs_groups_filtered.items():
+        # Sort by probability (descending)
+        rhs_prob_list.sort(key=lambda x: -x[1])
+
+        # Calculate cumulative probability
+        cumulative = 0.0
+        kept_rules = []
+
+        for rhs, prob in rhs_prob_list:
+            if cumulative < cumulative_threshold:
+                kept_rules.append((rhs, prob))
+                cumulative += prob
+            else:
+                total_removed += 1
+
+        # Store kept rules
+        for rhs, prob in kept_rules:
+            rule = f"{lhs} -> {rhs}"
+            selected_rules[rule] = prob
+
+    print(f"  Rules removed by threshold: {total_removed}")
+    print(f"  Remaining rules: {len(selected_rules)}")
+
+    # Re-normalize after threshold filtering
+    print(f"\nRe-normalizing after filtering...")
+
+    lhs_groups_final = defaultdict(dict)
+    for rule, prob in selected_rules.items():
+        lhs, rhs = rule.split(' -> ', 1)
+        lhs_groups_final[lhs][rhs] = prob
+
+    final_rules = {}
+    for lhs, rhs_dict in lhs_groups_final.items():
+        total = sum(rhs_dict.values())
+        for rhs, prob in rhs_dict.items():
+            renormalized_prob = prob / total if total > 0 else 0.0
+            rule = f"{lhs} -> {rhs}"
+            final_rules[rule] = renormalized_prob
+
+    print(f"  Final rule count: {len(final_rules)}")
+    print(f"  Final LHS categories: {len(lhs_groups_final)}")
+
+    # Apply minimum probability filter
+    filtered_count = 0
+    gsc_rules = []
+    for rule, prob in sorted(final_rules.items(), key=lambda x: -x[1]):
+        if prob >= min_prob:
+            gsc_rules.append(f"{prob:.10f} {rule}")
+        else:
+            filtered_count += 1
+
+    if filtered_count > 0:
+        print(f"  Rules filtered by min_prob: {filtered_count}")
+
+    return '\n'.join(gsc_rules)
+
+
 def collapse_and_normalize(rules, min_prob=1e-10, cumulative_threshold=0.95):
     """
     Collapse subscripts and normalize probabilities.
@@ -307,6 +413,11 @@ def main():
         default=1e-10,
         help='Minimum probability threshold (default: 1e-10)'
     )
+    parser.add_argument(
+        '--no-collapse',
+        action='store_true',
+        help='Keep Berkeley Parser subscripts (S_1, S_2, etc.) instead of collapsing to base categories'
+    )
 
     args = parser.parse_args()
 
@@ -328,12 +439,25 @@ def main():
     # Build grammar layers
     kept_rules, layer_info = build_grammar_layers(rules, bottom_nodes, root='S')
 
-    # Collapse and normalize
-    grammar_str = collapse_and_normalize(
-        kept_rules,
-        min_prob=args.min_prob,
-        cumulative_threshold=args.cumulative
-    )
+    # Normalize (with or without collapsing subscripts)
+    if args.no_collapse:
+        print(f"\n{'='*70}")
+        print("Using NO-COLLAPSE mode: preserving Berkeley Parser subscripts")
+        print(f"{'='*70}")
+        grammar_str = normalize_without_collapse(
+            kept_rules,
+            min_prob=args.min_prob,
+            cumulative_threshold=args.cumulative
+        )
+    else:
+        print(f"\n{'='*70}")
+        print("Using COLLAPSE mode: merging subscripts to base categories")
+        print(f"{'='*70}")
+        grammar_str = collapse_and_normalize(
+            kept_rules,
+            min_prob=args.min_prob,
+            cumulative_threshold=args.cumulative
+        )
 
     # Save to file
     with open(args.output, 'w') as f:
