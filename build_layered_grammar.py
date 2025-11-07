@@ -86,6 +86,7 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
 
     # Rules to keep
     kept_rules = []
+    seen_rules = set()  # Track rules we've already added to prevent duplicates
 
     # Track layers for statistics
     layer_info = {'layers': []}
@@ -101,6 +102,7 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
         # This means daughters can be from ANY previous layer or bottom nodes
         new_mothers = set()
         layer_rules = []
+        duplicates_skipped = 0
 
         for prob, mother, d1, d2 in rules:
             # Strip subscripts to check membership
@@ -110,9 +112,16 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
 
             # Check if both daughters are in all_reachable (cumulative across all layers)
             if d1_base in all_reachable and d2_base in all_reachable:
-                # Always keep this rule since both daughters are reachable
-                layer_rules.append((prob, mother, d1, d2))
-                kept_rules.append((prob, mother, d1, d2))
+                # Create a unique identifier for this rule (mother, d1, d2, prob)
+                rule_id = (mother, d1, d2, prob)
+
+                # Only add if we haven't seen this exact rule before
+                if rule_id not in seen_rules:
+                    seen_rules.add(rule_id)
+                    layer_rules.append((prob, mother, d1, d2))
+                    kept_rules.append((prob, mother, d1, d2))
+                else:
+                    duplicates_skipped += 1
 
                 # Track if mother is new to this layer (for statistics)
                 if mother_base not in all_reachable:
@@ -120,6 +129,8 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
 
         print(f"  New mother nodes: {len(new_mothers)}")
         print(f"  Rules added: {len(layer_rules)}")
+        if duplicates_skipped > 0:
+            print(f"  Duplicates skipped: {duplicates_skipped}")
 
         if new_mothers:
             sample = sorted(new_mothers)[:10]
