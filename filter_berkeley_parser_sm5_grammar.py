@@ -603,6 +603,19 @@ grammar_str = normalize_without_collapse(
 with open('filtered_sm5.grammar', 'w') as f:
     f.write(grammar_str)
 
+
+collapsed_grammar_str = collapse_and_normalize(kept_rules,
+                                               min_prob=1e-10,
+                                               cumulative_threshold=0.95)
+with open('collapsed_filtered_sm5.grammar', 'w') as f:
+    f.write(collapsed_grammar_str)
 # (optional) extract all rules used in berkeley_neural_parser_result
 # (optional) check if every rule used is in berkeley_parser_sm5.grammar
 # (optional) save out-of-grammar rule into a list
+
+max_length = float('-inf')
+for sent in sap_sentences:
+    sent_len = len(sent.split())
+    if max_length < sent_len:
+        max_length = sent_len
+print(f"max_sent_length of sap is {max_length}")  # 24
