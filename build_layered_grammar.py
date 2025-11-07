@@ -133,15 +133,14 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
             'new_mothers': sorted(new_mothers)
         })
 
-        # Check if we've reached the root
+        # Check if we've reached the root (for informational purposes only)
         root_base = strip_subscript(root)
         if root_base in new_mothers:
-            print(f"\n  ✓ Reached root '{root}'!")
-            break
+            print(f"\n  ✓ Root '{root}' reached in this layer (continuing to find all pathways)...")
 
-        # Check if no progress
+        # Check if no progress - this is the actual stopping condition
         if not new_mothers:
-            print(f"\n  ✗ No new mothers found. Cannot reach root '{root}'.")
+            print(f"\n  ✓ No new mothers found. All pathways explored.")
             break
 
         # Update for next iteration
