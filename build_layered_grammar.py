@@ -97,7 +97,8 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
         print(f"Layer {layer_num}:")
         print(f"  Current symbols: {len(current_layer)}")
 
-        # Find rules where BOTH daughters are in current reachable set
+        # Find rules where BOTH daughters are in all_reachable (cumulative)
+        # This means daughters can be from ANY previous layer or bottom nodes
         new_mothers = set()
         layer_rules = []
 
@@ -107,17 +108,15 @@ def build_grammar_layers(rules, bottom_nodes, root='S'):
             d2_base = strip_subscript(d2)
             mother_base = strip_subscript(mother)
 
-            # Check if both daughters are reachable
+            # Check if both daughters are in all_reachable (cumulative across all layers)
             if d1_base in all_reachable and d2_base in all_reachable:
-                # Check if mother is new (not yet in all_reachable)
+                # Always keep this rule since both daughters are reachable
+                layer_rules.append((prob, mother, d1, d2))
+                kept_rules.append((prob, mother, d1, d2))
+
+                # Track if mother is new to this layer (for statistics)
                 if mother_base not in all_reachable:
                     new_mothers.add(mother_base)
-                    layer_rules.append((prob, mother, d1, d2))
-                    kept_rules.append((prob, mother, d1, d2))
-                elif mother_base in current_layer:
-                    # Mother already exists but might be from this layer
-                    layer_rules.append((prob, mother, d1, d2))
-                    kept_rules.append((prob, mother, d1, d2))
 
         print(f"  New mother nodes: {len(new_mothers)}")
         print(f"  Rules added: {len(layer_rules)}")
