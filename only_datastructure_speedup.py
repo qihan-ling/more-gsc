@@ -12,7 +12,7 @@ import itertools
 import copy
 import time
 from matplotlib.patches import Rectangle
-
+from collections import defaultdict
 # JAX imports for GPU acceleration
 try:
     import jax
@@ -24,6 +24,14 @@ try:
 except ImportError:
     JAX_AVAILABLE = False
     print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
+
+
+def unique(fillers):
+    '''Returns (list) of unique names of fillers (list of str)'''
+
+    fillers = list(set(fillers))
+    fillers.sort()
+    return fillers
 
 
 class Node():
@@ -78,11 +86,21 @@ class PCFG():
         self.root = root
 
         self.pcfg_str = pcfg
+        print("DEBUG-PCFG1")
         self._cnf()
+        print("DEBUG-PCFG2")
         self._cnf2hnf()
-        self._tokenize_cnf()
+        print("DEBUG-PCFG3")
+        # self._tokenize_cnf()
+        self._tokenize_cnf_optimized()
+        print("DEBUG-PCFG4")
         self._tokenize_fillers()
+        print("DEBUG-PCFG5")
         self._sort_rules()
+        print("DEBUG-PCFG6")
+        # lookup will still be very sloe for 10K grammar
+        self._create_fast_lookups_pcfg()
+        print("DEBUG-PCFG7")
 
     def _set_opts(self):
         # the default setting
@@ -189,6 +207,102 @@ class PCFG():
 
         self.rules = rules_hnf
         self._add_names()
+
+    def _tokenize_cnf_optimized(self):
+        """Optimized version of _tokenize_cnf for large grammars"""
+
+        if not self.opts['use_hnf']:
+
+            t_start = time.time()
+            num_input_rules = len(self.rules)
+            print(f"Tokenizing CNF with {num_input_rules} input rules...")
+
+            # Step 1: Build lookup dictionaries (O(n) - do once instead of O(n²))
+            print("  Building lookup tables...")
+            t0 = time.time()
+
+            mothers = set(rule['m'] for rule in self.rules)
+
+            # Map: mother symbol -> list of daughters (for first position)
+            mother_to_daughters = defaultdict(list)
+            for rule in self.rules:
+                if rule['d2'] is None:  # Unary rule
+                    continue
+                mother_to_daughters[rule['m']].append(rule['d1'])
+
+            # Build sym_prob dictionary (probabilities for unary rules)
+            sym_prob = {}
+            for rule in self.rules:
+                if rule['d2'] is None:
+                    sym_prob[rule['d1']] = rule['p']
+
+            print(f"    Lookup tables built in {time.time()-t0:.2f}s")
+            print(f"    Found {len(mothers)} unique mother symbols")
+
+            # Step 2: Expand rules using lookup dictionaries
+            print("  Expanding rules...")
+            t0 = time.time()
+
+            # Use set of tuples for O(1) duplicate detection
+            rules_set = set()
+            rules_new = []
+
+            processed_count = 0
+            report_interval = max(1, num_input_rules // 10)  # Report every 10%
+
+            for rule in self.rules:
+                if rule['d2'] is not None:  # Binary rule only
+
+                    # Look up daughters using pre-built dictionary (O(1))
+                    if rule['d1'] in mothers:
+                        d1_syms = mother_to_daughters[rule['d1']]
+                    else:
+                        d1_syms = [rule['d1']]
+
+                    if rule['d2'] in mothers:
+                        d2_syms = mother_to_daughters[rule['d2']]
+                    else:
+                        d2_syms = [rule['d2']]
+
+                    # Create expanded rules (this is still O(k²) where k = avg daughters)
+                    for d1_sym in d1_syms:
+                        for d2_sym in d2_syms:
+                            # Calculate probability
+                            p = 1.0
+                            for sym in [rule['m'], d1_sym, d2_sym]:
+                                if sym in sym_prob:
+                                    p *= sym_prob[sym]
+
+                            # Use tuple for O(1) duplicate checking
+                            rule_tuple = (rule['m'], d1_sym, d2_sym, p)
+
+                            if rule_tuple not in rules_set:
+                                rules_set.add(rule_tuple)
+                                rule_new = {
+                                    'm': rule['m'],
+                                    'd1': d1_sym,
+                                    'd2': d2_sym,
+                                    'p': p
+                                }
+                                rules_new.append(rule_new)
+
+                # Progress reporting for large grammars
+                processed_count += 1
+                if processed_count % report_interval == 0:
+                    progress_pct = (processed_count / num_input_rules) * 100
+                    elapsed = time.time() - t0
+                    rules_created = len(rules_new)
+                    print(f"    Progress: {progress_pct:.0f}% ({processed_count}/{num_input_rules} rules) - "
+                          f"{rules_created} expanded rules created - {elapsed:.1f}s elapsed")
+
+            self.rules = rules_new
+            self._add_names()
+
+            t_total = time.time() - t_start
+            print(
+                f"  Tokenization complete: {num_input_rules} -> {len(rules_new)} rules in {t_total:.1f}s")
+            print(
+                f"    Average expansion: {len(rules_new)/num_input_rules:.1f}x")
 
     def _tokenize_cnf(self):
         # Tokenize CNF by replacing each type symbol (e.g., X)
@@ -344,6 +458,34 @@ class PCFG():
             expansion_rules, key=lambda x: x['m'])
 
         self.rules = non_copy_rules_sorted + copy_rules_sorted + expansion_rules_sorted
+
+    def _create_fast_lookups_pcfg(self):
+        '''Pre-compute lookup arrays for PCFG filler operations.
+
+        Creates cached arrays for fast filler property checks during training.
+        '''
+        # Name → index mapping
+        self.filler_name_to_idx = {
+            name: i for i, name in enumerate(self.filler_names)
+        }
+
+        # Pre-compute filler properties
+        self.filler_is_terminal = np.array([
+            self.is_terminal(fname) for fname in self.filler_names
+        ], dtype=bool)
+
+        self.filler_is_copy = np.array([
+            self.opts['copy'] in fname for fname in self.filler_names
+        ], dtype=bool)
+
+        self.filler_is_bracketed = np.array([
+            self.is_bracketed(fname) for fname in self.filler_names
+        ], dtype=bool)
+
+        roots = self.get_roots()
+        self.filler_is_root = np.array([
+            fname in roots for fname in self.filler_names
+        ], dtype=bool)
 
     def get_fillers(self, idx=None):
         '''Returns (list) of filler names for idx (int or list of int)'''
@@ -959,6 +1101,7 @@ class BrickRole(object):
 
         self._set_opts(max_sent_len=max_sent_len, use_hnf=use_hnf)
         self._create_role_names()
+        self._create_fast_lookups()
 
     def _set_opts(self, max_sent_len, use_hnf):
 
@@ -1000,6 +1143,70 @@ class BrickRole(object):
                 row_idx += 1
 
         self.role_names = rnames_all
+
+    def _create_fast_lookups(self):
+        '''Pre-compute lookup arrays for O(1) access during training.
+
+        This method creates NumPy arrays that cache expensive string parsing
+        and dictionary lookup operations. Called once during __init__, provides
+        major speedup for training loops that iterate over role_names.
+        '''
+        # Pre-compute str2tuple for all roles (avoids string parsing)
+        self.role_tuples = np.array([
+            self.str2tuple(rname) for rname in self.role_names
+        ], dtype=np.int32)  # Shape: [num_roles, 2]
+
+        # Pre-compute terminal status (level == 1)
+        self.role_is_terminal = (self.role_tuples[:, 0] == 1)
+
+        # Pre-compute bracketed status (level < 0, used in HNF)
+        self.role_is_bracketed = (self.role_tuples[:, 0] < 0)
+
+        # Create name → index mapping for fast lookups
+        self.role_name_to_idx = {
+            name: i for i, name in enumerate(self.role_names)
+        }
+
+        # Pre-compute daughter relationships (indices not names)
+        self.role_daughters_idx = {}
+        for pos_type in self.opts['pos_d']:
+            self.role_daughters_idx[pos_type] = [[]
+                                                 for _ in range(len(self.role_names))]
+
+        for ri, rname in enumerate(self.role_names):
+            daughters = self.get_daughters(rname)
+            for pos_type, daughter_names in daughters.items():
+                for daughter_name in daughter_names:
+                    if daughter_name in self.role_name_to_idx:
+                        daughter_idx = self.role_name_to_idx[daughter_name]
+                        self.role_daughters_idx[pos_type][ri].append(
+                            daughter_idx)
+
+        # Simplified arrays for common case (first 'l' and 'r' daughters)
+        self.role_daughter_l_idx = np.full(
+            len(self.role_names), -1, dtype=np.int32)
+        self.role_daughter_r_idx = np.full(
+            len(self.role_names), -1, dtype=np.int32)
+
+        for ri in range(len(self.role_names)):
+            if len(self.role_daughters_idx['l'][ri]) > 0:
+                self.role_daughter_l_idx[ri] = self.role_daughters_idx['l'][ri][0]
+            if len(self.role_daughters_idx['r'][ri]) > 0:
+                self.role_daughter_r_idx[ri] = self.role_daughters_idx['r'][ri][0]
+
+        # Pre-compute mother relationships
+        self.role_mothers_idx = {}
+        for pos_type in self.opts['pos_m']:
+            self.role_mothers_idx[pos_type] = [[]
+                                               for _ in range(len(self.role_names))]
+
+        for ri, rname in enumerate(self.role_names):
+            mothers = self.get_mothers(rname)
+            for pos_type, mother_names in mothers.items():
+                for mother_name in mother_names:
+                    if mother_name in self.role_name_to_idx:
+                        mother_idx = self.role_name_to_idx[mother_name]
+                        self.role_mothers_idx[pos_type][ri].append(mother_idx)
 
     def str2tuple(self, rname_str):
         return tuple([int(r) for r in rname_str[1:-1].split(',')])
@@ -1154,24 +1361,47 @@ class BrickRole(object):
 class HarmonicGrammar():
 
     def __init__(self, pcfg, root, max_sent_len, opts=None):
-
+        print("DEBUG1")
         self._set_opts(root=root, max_sent_len=max_sent_len)
+        print("DEBUG2")
         self._update_opts(opts)
-
+        print("DEBUG3")
         self.pcfg_str = pcfg
+        print("DEBUG4")
         self.g0 = PCFG(pcfg=pcfg, root=root, opts=self.opts)  # original rule
+        print("DEBUG5")
         self.g = copy.deepcopy(self.g0)
+        print("DEBUG6")
         self._create_roles()
+        print("DEBUG7")
         self._add_names()
-
+        print("DEBUG8")
         self.rules = []
+        print("DEBUG9")
         self._add_additional_rules()
+        print("DEBUG10")
         self._add_binary_rules()
+        print("DEBUG11")
         self._add_copy_rules()
+        print("DEBUG12")
         # self._add_competition_rules()
         # self._add_null_rules()
+        print("DEBUG13")
         self._add_unary_rules()
+        print("DEBUG14")
         self._add_expansion_rules()
+        print("DEBUG15")
+        print("Optimizing HarmonicGrammar with fast lookups...")
+        # Note: g0's fast lookups already created in PCFG.__init__
+        # self.g is a deepcopy, so copy the lookups
+        if hasattr(self.g0, 'filler_name_to_idx'):
+            self.g.filler_name_to_idx = self.g0.filler_name_to_idx.copy()
+            self.g.filler_is_terminal = self.g0.filler_is_terminal.copy()
+            self.g.filler_is_copy = self.g0.filler_is_copy.copy()
+            self.g.filler_is_bracketed = self.g0.filler_is_bracketed.copy()
+            self.g.filler_is_root = self.g0.filler_is_root.copy()
+        # Roles fast lookups already created in BrickRole.__init__
+        print("Optimization complete!")
 
     def get_simlist(self, dp=0.5):
 
