@@ -14,6 +14,7 @@ try:
 except ImportError:
     JAX_AVAILABLE = False
     print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
+from only_datastructure_speedup import PCFG, Node, HarmonicGrammar, BrickRole
 
 
 def encode_symbols(num_symbols, coord='dist', dp=0., dim=None, seed=None):
@@ -199,6 +200,103 @@ class GscNet():
         else:
             self.qpolicy = qpolicy
         self.backup_parameters()
+        if self.hg is not None:
+            self._precompute_fast_lookups()
+
+    def _precompute_fast_lookups(self):
+        '''Pre-compute index lookup structures for O(1) access.'''
+
+        print("Pre-computing GscNet fast lookups...")
+
+        # Verify Phase 1 is complete
+        if not hasattr(self.hg.roles, 'role_name_to_idx'):
+            print("WARNING: Phase 1 not found!")
+            return
+
+        # Binding indices for each role
+        self.role_to_binding_indices = {}
+        for ri in range(self.hg.num_roles):
+            start = ri * self.hg.num_fillers
+            end = start + self.hg.num_fillers
+            self.role_to_binding_indices[ri] = np.arange(
+                start, end, dtype=np.int32)
+
+        # Binding indices for each filler
+        self.filler_to_binding_indices = {}
+        for fi in range(self.hg.num_fillers):
+            self.filler_to_binding_indices[fi] = np.arange(
+                fi, self.hg.num_bindings, self.hg.num_fillers, dtype=np.int32
+            )
+
+        # Use HG's pre-computed mappings (from Phase 1)
+        self.role_name_to_idx = self.hg.roles.role_name_to_idx
+        self.filler_name_to_idx = self.hg.g.filler_name_to_idx
+
+        # Binding name to index
+        self.binding_name_to_idx = {}
+        for bi in range(self.hg.num_bindings):
+            self.binding_name_to_idx[self.hg.binding_names[bi]] = bi
+
+        # Pre-compute daughter indices (for training loops)
+        self.role_daughter_binding_indices = {}
+        for ri in range(self.hg.num_roles):
+            if not self.hg.roles.role_is_terminal[ri]:
+                dl_idx = self.hg.roles.role_daughter_l_idx[ri]
+                dr_idx = self.hg.roles.role_daughter_r_idx[ri]
+
+                if dl_idx >= 0 and dr_idx >= 0:
+                    self.role_daughter_binding_indices[ri] = {
+                        'l': self.role_to_binding_indices[dl_idx],
+                        'r': self.role_to_binding_indices[dr_idx],
+                        'self': self.role_to_binding_indices[ri]
+                    }
+
+        # Pre-compute mother indices (for building model function)
+        self.role_mother_binding_indices = {}
+        for ri in range(self.hg.num_roles):
+            if not self.hg.roles.role_is_terminal[ri]:
+                dl_idx = self.hg.roles.role_mother_l_idx[ri]
+                dr_idx = self.hg.roles.role_mother_r_idx[ri]
+
+                if dl_idx >= 0 and dr_idx >= 0:
+                    self.role_mother_binding_indices[ri] = {
+                        'l': self.role_to_binding_indices[dl_idx],
+                        'r': self.role_to_binding_indices[dr_idx],
+                        'self': self.role_to_binding_indices[ri]
+                    }
+
+        print("✓ GscNet fast lookups complete!")
+
+    def find_roles_fast(self, rnames):
+        '''Fast O(1) version of find_roles.'''
+        if not isinstance(rnames, list):
+            rnames = [rnames]
+
+        if len(rnames) == 1:
+            role_idx = self.role_name_to_idx.get(rnames[0])
+            return self.role_to_binding_indices[role_idx] if role_idx is not None else np.array([], dtype=np.int32)
+
+        result = []
+        for rname in rnames:
+            role_idx = self.role_name_to_idx.get(rname)
+            if role_idx is not None:
+                result.append(self.role_to_binding_indices[role_idx])
+
+        return np.concatenate(result) if result else np.array([], dtype=np.int32)
+
+    def find_fillers_fast(self, fnames):
+        '''Fast O(1) version of find_fillers.'''
+        if not isinstance(fnames, list):
+            fnames = [fnames]
+
+        return [self.filler_name_to_idx[fn] for fn in fnames if fn in self.filler_name_to_idx]
+
+    def find_bindings_fast(self, bnames):
+        '''Fast O(1) version of find_bindings.'''
+        if not isinstance(bnames, list):
+            bnames = [bnames]
+
+        return [self.binding_name_to_idx[bn] for bn in bnames if bn in self.binding_name_to_idx]
 
     def _set_encodings(self):
 
@@ -386,11 +484,15 @@ class GscNet():
         # t1 = time.time()
         # Binary and copy rules =========================
         for rule in self.hg.subset_rules(['binary', 'copy']):
-            for role in roles.role_names:
-                if roles.is_bracketed(role) == rule['br']:
-                    mother_roles = roles.get_mothers(role)
-                    focus_mother_roles = mother_roles[rule['rel']]
-                    for focus_mother_role in focus_mother_roles:
+            # for role in roles.role_names:
+            for ri in range(len(self.hg.role_names)):
+                # if roles.is_bracketed(role) == rule['br']:
+                if self.hg.roles.role_is_bracketed[ri] == rule['br']:
+                    # mother_roles = roles.get_mothers(role)
+                    # focus_mother_roles = mother_roles[rule['rel']]
+                    focus_mother_roles_indices = self.role_mother_binding_indices[ri][rule['rel']]
+                    for focus_mother_roles_ind in focus_mother_roles_indices:
+                        focus_mother_role = self.role_names[focus_mother_roles_ind]
                         if focus_mother_role in roles.role_names:
                             b1name = rule['f1'] + bsep + role
                             b2name = rule['f2'] + bsep + focus_mother_role
@@ -404,8 +506,10 @@ class GscNet():
         for rule in self.hg.subset_rules('competition'):
             r1, r2 = rule['rel'].split('/')
             if r1 == 'ub' and r2 == 'ub':
-                for role in roles.role_names:
-                    if not roles.is_bracketed(role):
+                # for role in roles.role_names:
+                for ri in range(len(self.hg.role_names)):
+                    # if not roles.is_bracketed(role):
+                    if not self.hg.roles.role_is_bracketed[ri]:
                         bname1 = rule['f1'] + bsep + role
                         bname2 = rule['f2'] + bsep + role
                         self.set_weight(bname1, bname2, rule['H'],
@@ -467,9 +571,12 @@ class GscNet():
 
         # Additional constraints (penalty for ungrammatical bindings)
         if H_root_illegitimate < 0:
-            for rname in roles.role_names:
+            # for rname in roles.role_names:
+            for ri in range(len(roles.role_names)):
+                rname = roles.role_names[ri]
                 if role_system == 'brick_role':
-                    lv, pos = roles.str2tuple(rname)
+                    # lv, pos = roles.str2tuple(rname)
+                    lv, pos = roles.role_tuples[ri]
                     if (lv > 0 and pos > 1) or (lv < 0):
                         bnames = [f + bsep + rname
                                   for f in self.hg.get_roots()]
@@ -488,9 +595,12 @@ class GscNet():
                         self.set_bias(bnames, H_root_illegitimate, c2n=False)
 
         if H_terminal_illegitimate < 0:
-            for rname in roles.role_names:
+            # for rname in roles.role_names:
+            for ri in range(len(roles.role_names)):
+                rname = roles.role_names[ri]
                 if role_system == 'brick_role':
-                    lv, pos = roles.str2tuple(rname)
+                    # lv, pos = roles.str2tuple(rname)
+                    lv, pos = roles.role_tuples[ri]
                     if lv != 1:
                         bnames = [f + bsep + rname
                                   for f in self.hg.g.get_fillers()
@@ -499,9 +609,12 @@ class GscNet():
                             bnames, H_terminal_illegitimate, c2n=False)
 
         if H_nonterminal_illegitimate < 0:
-            for rname in roles.role_names:
+            # for rname in roles.role_names:
+            for ri in range(len(roles.role_names)):
+                rname = roles.role_names[ri]
                 if role_system == 'brick_role':
-                    lv, pos = roles.str2tuple(rname)
+                    # lv, pos = roles.str2tuple(rname)
+                    lv, pos = roles.role_tuples[ri]
                     if lv == 1:
                         bnames = [f + bsep + rname
                                   for f in self.hg.g.get_fillers()
@@ -511,9 +624,12 @@ class GscNet():
                             bnames, H_nonterminal_illegitimate, c2n=False)
 
         if H_copy_illegitimate < 0:
-            for rname in roles.role_names:
+            # for rname in roles.role_names:
+            for ri in range(len(roles.role_names)):
+                rname = roles.role_names[ri]
                 if role_system == 'brick_role':
-                    lv, pos = roles.str2tuple(rname)
+                    # lv, pos = roles.str2tuple(rname)
+                    lv, pos = roles.role_tuples[ri]
                     if lv == 1:
                         bnames = [f + bsep + rname
                                   for f in self.hg.g.get_fillers()
@@ -537,10 +653,13 @@ class GscNet():
                 if not np.isclose(self.hg.opts['H_root_illegitimate'], 0.):
 
                     for fname in self.hg.get_roots():
-                        for rname in self.role_names:
+                        # for rname in self.role_names:
+                        for ri in range(len(self.hg.role_names)):
+                            rname = self.role_names[ri]
                             bname = fname + self.hg.opts['bsep'] + rname
                             idx = self.find_bindings(bname)
-                            lv, pos = self.hg.roles.str2tuple(rname)
+                            # lv, pos = self.hg.roles.str2tuple(rname)
+                            lv, pos = self.hg.roles.roles_tuple[ri]
                             if lv == 1:
                                 self.set_bias(
                                     bname, self.hg.opts['H_root_illegitimate'])
@@ -564,10 +683,13 @@ class GscNet():
                 if not np.isclose(self.hg.opts['H_root_illegitimate'], 0.):
 
                     for fname in self.hg.get_roots():
-                        for rname in self.role_names:
+                        # for rname in self.role_names:
+                        for ri in range(len(self.hg.role_names)):
+                            rname = self.role_names[ri]
                             bname = fname + self.hg.opts['bsep'] + rname
                             idx = self.find_bindings(bname)
-                            lv, pos = self.hg.roles.str2tuple(rname)
+                            # lv, pos = self.hg.roles.str2tuple(rname)
+                            lv, pos = self.hg.roles.roles_tuple[ri]
                             if lv == 1:
                                 self.set_bias(
                                     bname, self.hg.opts['H_root_illegitimate'])
@@ -595,8 +717,11 @@ class GscNet():
             if self.hg.opts['add1_to_root']:
 
                 roots = self.hg.g.get_roots() + [self.hg.g.opts['f_root']]
-                rid = self.find_roles(self.role_names[-1])
-                rid = [ii for ii in rid if ii in self.find_fillers(roots)]
+                # rid = self.find_roles(self.role_names[-1])
+                rid = self.find_roles_fast(self.role_names[-1])
+                # rid = [ii for ii in rid if ii in self.find_fillers(roots)]
+                root_filler_indices = self.find_fillers_fast(roots)
+                rid = [ii for ii in rid if ii in root_filler_indices]
                 self.bC[rid] += 1.
 
             self._set_biases()
@@ -723,9 +848,12 @@ class GscNet():
             weights = np.ones(self.num_bindings)
 
             if pos > 0:
-                for rname in self.role_names:
-                    idx = self.find_roles(rname)
-                    lv0, pos0 = self.hg.roles.str2tuple(rname)
+                # for rname in self.role_names:
+                #     idx = self.find_roles(rname)
+                #     lv0, pos0 = self.hg.roles.str2tuple(rname)
+                for ri in range(len(self.hg.role_names)):
+                    idx = self.role_to_binding_indices[ri]
+                    lv0, pos0 = self.hg.roles.role_tuples[ri]
 
                     if scale_type == 'lv':
                         if lv > 0:
@@ -1009,23 +1137,31 @@ class GscNet():
             # allow the udpate of second-order bias of every binding
             np.fill_diagonal(mask0, 1)
         else:
-            rnames_terminal = self.hg.roles.get_terminals()
-            idx_terminal = self.find_roles(rnames_terminal)
+            # rnames_terminal = self.hg.roles.get_terminals()
+            # idx_terminal = self.find_roles(rnames_terminal)
             mask0 = np.zeros(self.WC.shape)
-            for role in self.role_names:
-                idx = self.find_roles(role)
-                mask0[np.ix_(idx, idx)] = 1.
-                if not self.hg.roles.is_terminal(role):
-                    daughters = self.hg.roles.get_daughters(role)
-                    idx_l = self.find_roles(daughters['l'])
-                    idx_r = self.find_roles(daughters['r'])
-                    mask0[np.ix_(idx, idx_l)] = 1.
-                    mask0[np.ix_(idx_l, idx)] = 1.
-                    mask0[np.ix_(idx, idx_r)] = 1.
-                    mask0[np.ix_(idx_r, idx)] = 1.
-                    if self.train_opts['update_sister_harmony']:
-                        mask0[np.ix_(idx_l, idx_r)] = 1.
-                        mask0[np.ix_(idx_r, idx_l)] = 1.
+            # for role in self.role_names:
+            #     idx = self.find_roles(role)
+            #     mask0[np.ix_(idx, idx)] = 1.
+            #     if not self.hg.roles.is_terminal(role):
+            #         daughters = self.hg.roles.get_daughters(role)
+            #         idx_l = self.find_roles(daughters['l'])
+            #         idx_r = self.find_roles(daughters['r'])
+            for ri in range(len(self.hg.role_names)):
+                if not self.hg.roles.role_is_terminal[ri]:
+                    indices = self.get_role_and_daughter_indices_fast(ri)
+                    if indices != None:
+                        idx = indices['self']
+                        mask0[np.ix_(idx, idx)] = 1.
+                        idx_l = indices['l']
+                        idx_r = indices['r']
+                        mask0[np.ix_(idx, idx_l)] = 1.
+                        mask0[np.ix_(idx_l, idx)] = 1.
+                        mask0[np.ix_(idx, idx_r)] = 1.
+                        mask0[np.ix_(idx_r, idx)] = 1.
+                        if self.train_opts['update_sister_harmony']:
+                            mask0[np.ix_(idx_l, idx_r)] = 1.
+                            mask0[np.ix_(idx_r, idx_l)] = 1.
 
         return mask0
 
@@ -1185,13 +1321,17 @@ class GscNet():
 
                 if self.train_opts['asynchronous_update_choose_errmax']:
                     temp = np.zeros(len(self.role_names))
-                    for ri, rname in enumerate(self.role_names):
-                        idx = self.find_roles(rname)
+                    # for ri, rname in enumerate(self.role_names):
+                    #     idx = self.find_roles(rname)
+                    for ri in range(len(self.hg.role_names)):
+                        idx = self.role_to_binding_indices[ri]
+                        rname = self.hg.role_names[ri]
                         for key, val in err['treelets'].items():
                             if key[0] in idx:
                                 temp[ri] += abs(val)
 
-                        if self.hg.roles.is_terminal(rname):
+                        # if self.hg.roles.is_terminal(rname):
+                        if self.hg.roles.role_is_terminal[ri]:
                             for key, val in err['bindings'].items():
                                 if key in idx:
                                     temp[ri] += abs(val)
@@ -1206,21 +1346,31 @@ class GscNet():
                         self.num_roles, self.num_treelets_update, replace=False)
 
                 maskbC_update = np.zeros(self.num_bindings)
-                rnames = [self.role_names[rid] for rid in role_idx_list]
-                idx = self.find_roles(rnames)
+                # rnames = [self.role_names[rid] for rid in role_idx_list]
+                # idx = self.find_roles(rnames)
+                idx = np.concatenate([self.role_to_binding_indices[rid]]
+                                     for rid in role_idx_list)
                 maskbC_update[idx] = 1.
 
                 maskWC_update = np.zeros(
                     (self.num_bindings, self.num_bindings))
                 treelet_list = []
                 for rid in role_idx_list:
-                    r_daughters = self.hg.roles.get_daughters(
-                        self.role_names[rid])
-                    treelet_list.append(
-                        [self.role_names[rid]] + r_daughters['l'] + r_daughters['r'])
+                    #     r_daughters = self.hg.roles.get_daughters(
+                    #         self.role_names[rid])
+                    #     treelet_list.append(
+                    #         [self.role_names[rid]] + r_daughters['l'] + r_daughters['r'])
 
-                for treelet in treelet_list:
-                    idx = self.find_roles(treelet)
+                    # for treelet in treelet_list:
+                    #     idx = self.find_roles(treelet)
+                    if rid in self.role_daughter_binding_indices[rid]:
+                        daughter_info = self.role_daughter_binding_indices[rid]
+                        idx_self = daughter_info['self']
+                        idx_l = daughter_info['l']
+                        idx_r = daughter_info['r']
+                        idx = np.concatenate([idx_self, idx_l, idx_r])
+                    else:
+                        idx = self.role_to_binding_indices[rid]
                     maskWC_update[np.ix_(idx, idx)] = 1.
             else:
                 maskWC_update = np.ones((self.num_bindings, self.num_bindings))
@@ -1598,6 +1748,57 @@ class GscNet():
         stat = self.get_corpus_stat(corpus)
         return stat, np.array(actC_list)
 
+    def get_role_and_daughter_indices_fast(self, role_idx):
+        """
+        Fast lookup for a role and its daughters' binding indices.
+
+        This is a common pattern in training loops:
+            for role in self.role_names:
+                idx = self.find_roles(role)
+                daughters = self.hg.roles.get_daughters(role)
+                idx_l = self.find_roles(daughters['l'][0])
+                idx_r = self.find_roles(daughters['r'][0])
+
+        Becomes:
+            for ri in range(len(self.hg.role_names)):
+                indices = self.get_role_and_daughter_indices_fast(ri)
+                idx = indices['self']
+                idx_l = indices['l']
+                idx_r = indices['r']
+
+        Args:
+            role_idx: int - index of role (0 to num_roles-1)
+
+        Returns:
+            dict or None: {'self': array, 'l': array, 'r': array} or None if terminal
+        """
+        return self.role_daughter_binding_indices.get(role_idx)
+
+    def find_roles_by_filler_fast(self, filler_indices):
+        """
+        Find all bindings that have the given filler(s).
+
+        Useful pattern: Get all bindings for specific fillers across all roles.
+
+        Args:
+            filler_indices: int or list of int - filler index/indices
+
+        Returns:
+            np.array: binding indices
+        """
+        if not isinstance(filler_indices, list):
+            filler_indices = [filler_indices]
+
+        result = []
+        for fi in filler_indices:
+            if fi in self.filler_to_binding_indices:
+                result.append(self.filler_to_binding_indices[fi])
+
+        if result:
+            return np.concatenate(result)
+        else:
+            return np.array([], dtype=np.int32)
+
     def clear_input(self):
 
         self.extC = np.zeros(self.num_bindings)
@@ -1722,8 +1923,13 @@ class GscNet():
             keys1 = [key for key in stat_P['bindings']]
             keys2 = [key for key in stat_Q['bindings']]
             keys_all = list(set(keys1 + keys2))
+            rname_terminal_indices = np.where(
+                self.hg.roles.role_is_terminal)[0]
+            terminal_rnames = [self.role_names[ri]
+                               for ri in rname_terminal_indices]
             for key in keys_all:
-                if key in self.find_roles(self.hg.roles.get_terminals()):
+                # if key in self.find_roles(self.hg.roles.get_terminals()):
+                if key in set(terminal_rnames):
                     if key not in stat_P['bindings']:
                         p = 1e-15
                     else:
@@ -1750,8 +1956,11 @@ class GscNet():
         # print('extC_token', extC_token)
         # print([self.binding_names[ii] for ii, val in enumerate(extC_token) if val == 1])
 
-        rnames_terminal = self.hg.roles.get_terminals()
-        idx_terminal = self.find_roles(rnames_terminal)
+        # rnames_terminal = self.hg.roles.get_terminals()
+        rname_terminal = np.where(self.hg.roles.role_is_terminal)[0]
+        # idx_terminal = self.find_roles(rnames_terminal)
+        idx_terminal = np.concatenate([self.role_to_binding_indices[ri]
+                                       for ri in rname_terminal])
 
         dWC = np.zeros(self.WC.shape)
         dbC = np.zeros(self.bC.shape)
@@ -1986,20 +2195,27 @@ class GscNet():
         count_L = 0
         count_R = 0
         count_S = 0
-        for role in self.role_names:
-            if not self.hg.roles.is_terminal(role):
-                daughters = self.hg.roles.get_daughters(role)
-                daughter_l = daughters['l'][0]
-                daughter_r = daughters['r'][0]
-                idx = self.find_roles(role)
-                idx_l = self.find_roles(daughter_l)
-                idx_r = self.find_roles(daughter_r)
-                count_L += 1
-                count_R += 1
-                count_S += 1
-                WC_L += self.WC[np.ix_(idx, idx_l)]
-                WC_R += self.WC[np.ix_(idx, idx_r)]
-                WC_S += self.WC[np.ix_(idx_l, idx_r)]
+        # for role in self.role_names:
+        #     if not self.hg.roles.is_terminal(role):
+        #         daughters = self.hg.roles.get_daughters(role)
+        #         daughter_l = daughters['l'][0]
+        #         daughter_r = daughters['r'][0]
+        #         idx = self.find_roles(role)
+        #         idx_l = self.find_roles(daughter_l)
+        #         idx_r = self.find_roles(daughter_r)
+        for ri in range(len(self.hg.role_names)):
+            if not self.hg.roles.role_is_terminal[ri]:
+                indices = self.get_role_and_daughter_indices_fast(ri)
+                if indices != None:
+                    idx = indices['self']
+                    idx_l = indices['l']
+                    idx_r = indices['r']
+                    count_L += 1
+                    count_R += 1
+                    count_S += 1
+                    WC_L += self.WC[np.ix_(idx, idx_l)]
+                    WC_R += self.WC[np.ix_(idx, idx_r)]
+                    WC_S += self.WC[np.ix_(idx_l, idx_r)]
 
         WC_L /= float(count_L)
         WC_R /= float(count_R)
@@ -2007,21 +2223,28 @@ class GscNet():
 
         WC_avg = np.zeros(self.WC.shape)
 
-        for role in self.role_names:
-            if not self.hg.roles.is_terminal(role):
-                daughters = self.hg.roles.get_daughters(role)
-                daughter_l = daughters['l'][0]
-                daughter_r = daughters['r'][0]
-                idx = self.find_roles(role)
-                idx_l = self.find_roles(daughter_l)
-                idx_r = self.find_roles(daughter_r)
-                WC_avg[np.ix_(idx, idx_l)] = WC_L
-                WC_avg[np.ix_(idx_l, idx)] = WC_L.T
-                WC_avg[np.ix_(idx, idx_r)] = WC_R
-                WC_avg[np.ix_(idx_r, idx)] = WC_R.T
-                # In the default setting, this will be 0.
-                WC_avg[np.ix_(idx_l, idx_r)] = WC_S
-                WC_avg[np.ix_(idx_r, idx_l)] = WC_S.T
+        # for role in self.role_names:
+        #     if not self.hg.roles.is_terminal(role):
+        #         daughters = self.hg.roles.get_daughters(role)
+        #         daughter_l = daughters['l'][0]
+        #         daughter_r = daughters['r'][0]
+        #         idx = self.find_roles(role)
+        #         idx_l = self.find_roles(daughter_l)
+        #         idx_r = self.find_roles(daughter_r)
+        for ri in range(len(self.hg.role_names)):
+            if not self.hg.roles.role_is_terminal[ri]:
+                indices = self.get_role_and_daughter_indices_fast(ri)
+                if indices != None:
+                    idx = indices['self']
+                    idx_l = indices['l']
+                    idx_r = indices['r']
+                    WC_avg[np.ix_(idx, idx_l)] = WC_L
+                    WC_avg[np.ix_(idx_l, idx)] = WC_L.T
+                    WC_avg[np.ix_(idx, idx_r)] = WC_R
+                    WC_avg[np.ix_(idx_r, idx)] = WC_R.T
+                    # In the default setting, this will be 0.
+                    WC_avg[np.ix_(idx_l, idx_r)] = WC_S
+                    WC_avg[np.ix_(idx_r, idx_l)] = WC_S.T
 
         return WC_avg
 
@@ -2033,40 +2256,54 @@ class GscNet():
         count_L = 0
         count_R = 0
         count_S = 0
-        for role in self.role_names:
-            if not self.hg.roles.is_terminal(role):
-                daughters = self.hg.roles.get_daughters(role)
-                daughter_l = daughters['l'][0]
-                daughter_r = daughters['r'][0]
-                idx = self.find_roles(role)
-                idx_l = self.find_roles(daughter_l)
-                idx_r = self.find_roles(daughter_r)
-                count_L += 1
-                count_R += 1
-                count_S += 1
-                WC_L += self.WC[np.ix_(idx, idx_l)]
-                WC_R += self.WC[np.ix_(idx, idx_r)]
-                WC_S += self.WC[np.ix_(idx_l, idx_r)]
+        # for role in self.role_names:
+        #     if not self.hg.roles.is_terminal(role):
+        #         daughters = self.hg.roles.get_daughters(role)
+        #         daughter_l = daughters['l'][0]
+        #         daughter_r = daughters['r'][0]
+        #         idx = self.find_roles(role)
+        #         idx_l = self.find_roles(daughter_l)
+        #         idx_r = self.find_roles(daughter_r)
+        for ri in range(len(self.hg.role_names)):
+            if not self.hg.roles.role_is_terminal[ri]:
+                indices = self.get_role_and_daughter_indices_fast(ri)
+                if indices != None:
+                    idx = indices['self']
+                    idx_l = indices['l']
+                    idx_r = indices['r']
+                    count_L += 1
+                    count_R += 1
+                    count_S += 1
+                    WC_L += self.WC[np.ix_(idx, idx_l)]
+                    WC_R += self.WC[np.ix_(idx, idx_r)]
+                    WC_S += self.WC[np.ix_(idx_l, idx_r)]
 
         WC_L /= float(count_L)
         WC_R /= float(count_R)
         WC_S /= float(count_S)
 
-        for role in self.role_names:
-            if not self.hg.roles.is_terminal(role):
-                daughters = self.hg.roles.get_daughters(role)
-                daughter_l = daughters['l'][0]
-                daughter_r = daughters['r'][0]
-                idx = self.find_roles(role)
-                idx_l = self.find_roles(daughter_l)
-                idx_r = self.find_roles(daughter_r)
-                self.WC[np.ix_(idx, idx_l)] = WC_L
-                self.WC[np.ix_(idx_l, idx)] = WC_L.T
-                self.WC[np.ix_(idx, idx_r)] = WC_R
-                self.WC[np.ix_(idx_r, idx)] = WC_R.T
-                # In the default setting, this will be 0.
-                self.WC[np.ix_(idx_l, idx_r)] = WC_S
-                self.WC[np.ix_(idx_r, idx_l)] = WC_S.T
+        # for role in self.role_names:
+        #     if not self.hg.roles.is_terminal(role):
+        #         daughters = self.hg.roles.get_daughters(role)
+        #         daughter_l = daughters['l'][0]
+        #         daughter_r = daughters['r'][0]
+        #         idx = self.find_roles(role)
+        #         idx_l = self.find_roles(daughter_l)
+        #         idx_r = self.find_roles(daughter_r)
+        for ri in range(len(self.hg.role_names)):
+            if not self.hg.roles.role_is_terminal[ri]:
+                indices = self.get_role_and_daughter_indices_fast(ri)
+                if indices != None:
+                    idx = indices['self']
+                    idx_l = indices['l']
+                    idx_r = indices['r']
+                    self.WC[np.ix_(idx, idx_l)] = WC_L
+                    self.WC[np.ix_(idx_l, idx)] = WC_L.T
+                    self.WC[np.ix_(idx, idx_r)] = WC_R
+                    self.WC[np.ix_(idx_r, idx)] = WC_R.T
+                    # In the default setting, this will be 0.
+                    self.WC[np.ix_(idx_l, idx_r)] = WC_S
+                    self.WC[np.ix_(idx_r, idx_l)] = WC_S.T
 
         self._set_weights()
 
@@ -2085,9 +2322,18 @@ class GscNet():
                 if self.hg.opts['add1_to_root']:
 
                     roots = self.hg.g.get_roots() + [self.hg.g.opts['f_root']]
-                    rid = self.find_roles(self.role_names[-1])
-                    rid = [ii for ii in rid if ii in self.find_fillers(roots)]
+                    # rid = self.find_roles(self.role_names[-1])
+                    # rid = [
+                    #     ii for ii in rid if ii in self.find_fillers(roots)]
                     # rid = self.find_roles(self.role_names[-1])  # top brick role
+                    root_filler_indices = self.find_fillers_fast(roots)
+                    role_idx = len(self.hg.role_names) - 1
+                    role_binding_idx = self.role_to_binding_indices[role_idx]
+                    root_bindings = np.concatenate([
+                        self.filler_to_binding_indices[fi]
+                        for fi in root_filler_indices
+                    ])
+                    rid = np.intersect1d(role_binding_idx, root_bindings)
                     bC[rid] -= 2.   # NOTE: second-order bias = 2 * first-order bias
 
             idx = self.train_opts['idx_mask_bias2']
@@ -2119,8 +2365,17 @@ class GscNet():
             if 'add1_to_root' in self.hg.opts:
                 if self.hg.opts['add1_to_root']:
                     roots = self.hg.g.get_roots() + [self.hg.g.opts['f_root']]
-                    rid = self.find_roles(self.role_names[-1])
-                    rid = [ii for ii in rid if ii in self.find_fillers(roots)]
+                    # rid = self.find_roles(self.role_names[-1])
+                    root_filler_indices = self.find_fillers_fast(roots)
+                    role_idx = len(self.hg.role_names) - 1
+                    role_binding_idx = self.role_to_binding_indices[role_idx]
+                    root_bindings = np.concatenate([
+                        self.filler_to_binding_indices[fi]
+                        for fi in root_filler_indices
+                    ])
+                    rid = np.intersect1d(role_binding_idx, root_bindings)
+                    # rid = [
+                    #     ii for ii in root_filler_indices if ii in self.find_fillers(roots)]
                     # rid = self.find_roles(self.role_names[-1])  # top brick role
                     bC[rid] -= 1.
 

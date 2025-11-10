@@ -1187,12 +1187,24 @@ class BrickRole(object):
             len(self.role_names), -1, dtype=np.int32)
         self.role_daughter_r_idx = np.full(
             len(self.role_names), -1, dtype=np.int32)
+        self.role_daughter_m_idx = np.full(
+            len(self.role_names), -1, dtype=np.int32)
+        self.role_daughter_l0_idx = np.full(
+            len(self.role_names), -1, dtype=np.int32)
+        self.role_daughter_r0_idx = np.full(
+            len(self.role_names), -1, dtype=np.int32)
 
         for ri in range(len(self.role_names)):
             if len(self.role_daughters_idx['l'][ri]) > 0:
                 self.role_daughter_l_idx[ri] = self.role_daughters_idx['l'][ri][0]
             if len(self.role_daughters_idx['r'][ri]) > 0:
                 self.role_daughter_r_idx[ri] = self.role_daughters_idx['r'][ri][0]
+            if len(self.role_daughters_idx['m'][ri]) > 0:
+                self.role_daughter_r_idx[ri] = self.role_daughters_idx['m'][ri][0]
+            if len(self.role_daughters_idx['l0'][ri]) > 0:
+                self.role_daughter_r_idx[ri] = self.role_daughters_idx['l0'][ri][0]
+            if len(self.role_daughters_idx['r0'][ri]) > 0:
+                self.role_daughter_r_idx[ri] = self.role_daughters_idx['r0'][ri][0]
 
         # Pre-compute mother relationships
         self.role_mothers_idx = {}
