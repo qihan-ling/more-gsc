@@ -210,6 +210,333 @@ def dot_products(dp_mat, dim, max_iter=100000, seed=None, tol=1e-6):
 
     return sym_mat
 
+
+def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0., 1.],
+                      linewidth=1, legend=True, savefilename_prefix=None, log_y=False):
+
+    nsent_per_iteration = net.train_opts['num_trials'] + \
+        net.train_opts['parallel_parser_num_trials']
+
+    # Plot KL divergence
+    xval = np.arange(
+        len(net.traces_train['kl_trees'])) * nsent_per_iteration
+    # KL was computed using ema prob estimate (Do not smooth again)
+    plt.plot(xval, net.traces_train['kl_trees'], linewidth=linewidth)
+    plt.grid()
+    plt.xlabel('# of sentences', fontsize=15)
+    plt.ylabel('KL divergence', fontsize=15)
+    if ylim_kl is not None:
+        plt.ylim(ylim_kl)
+    plt.xticks(fontsize=15)
+    plt.yticks(fontsize=15)
+    plt.tight_layout()
+    if savefilename_prefix is not None:
+        plt.savefig(savefilename_prefix + '-kl.pdf')
+    # plt.show()
+
+    # Plot accuracy
+    xval = np.arange(len(net.traces_train['acc'])) * nsent_per_iteration
+    plt.plot(xval, smooth(
+        net.traces_train['acc'], weight=weight), linewidth=linewidth)
+    plt.ylim(0, 1)
+    plt.xlabel('# of sentences', fontsize=15)
+    plt.ylabel('Production accuracy', fontsize=15)
+    plt.grid()
+    if ylim_acc is not None:
+        plt.ylim(ylim_acc)
+    plt.xticks(fontsize=15)
+    plt.yticks(fontsize=15)
+    plt.tight_layout()
+    if savefilename_prefix is not None:
+        plt.savefig(savefilename_prefix + '-acc.pdf')
+    # plt.show()
+
+    if savefilename_prefix is None:
+        savefilename = None
+    else:
+        savefilename = savefilename_prefix + '-prob.pdf'
+    plot_prob_trees_trace(net, weight=weight, normalize=normalize,
+                          savefilename=savefilename, linewidth=linewidth, legend=legend, log_y=log_y)
+
+
+def plot_prob_trees_trace(
+        net, normalize=False, weight=0.,
+        xunit=[None, 'num_trials'][1], savefilename=None,
+        legend=True, linewidth=1, log_y=False):
+
+    nsent_per_iteration = net.train_opts['num_trials'] + \
+        net.train_opts['parallel_parser_num_trials']
+
+    sent0 = []
+    for sent in net.corpus['sentence']:
+        sent0.append(' '.join([bname.split('/')[0] for bname in sent]))
+
+    ptarg = net.corpus['prob_sent']
+    yy = net.traces_train['prob_sent']
+
+    if xunit is None:
+        xx = np.arange(len(yy))
+        xlab = '# of updates'
+    elif xunit == 'num_trials':
+        # It is assumed that num_trials was fixed over the course of training
+        xx = np.arange(len(yy)) * nsent_per_iteration
+        xlab = '# of sentences'
+
+    if normalize:
+        acc = net.traces_train['acc']  # 2d-array
+        # first_nonzero = np.where(net.traces_train['acc'] > 0)[0][0]
+        yy = yy / (acc + 1e-15)  # prevent zero division
+
+    yy = smooth(yy, weight)
+
+    if log_y:
+        yy = np.log(yy)
+
+    for si, sent in enumerate(net.corpus['sentence']):
+        if log_y:
+            yy1 = np.log(ptarg[si])
+        else:
+            yy1 = ptarg[si]
+        plt.axhline(yy1, linestyle='--', c='C%d' % (si % 10))
+        plt.plot(xx, yy[:, si],  # / yy.sum(axis=1),
+                 label=sent0[si], color='C%d' % (si % 10), linewidth=linewidth)
+
+    ylab = 'Sentence probability'
+    if log_y:
+        ylab = 'Log sentence probability'
+
+    if normalize:
+        ylab += '\n(normalized)'
+    plt.ylabel(ylab, fontsize=15)
+    plt.xlabel(xlab, fontsize=15)
+    if legend:
+        plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.grid()
+    plt.xticks(fontsize=15)
+    plt.yticks(fontsize=15)
+    plt.tight_layout()
+    if savefilename is not None:
+        plt.savefig(savefilename)
+    # plt.show()
+
+
+def plot_treelet_act_trace(
+        net, rname, num_treelets=4,
+        tmin=0, tmax=1000, downsampling=30,
+        suppress_pos=True, add_prob=False, legend_pos=None):
+
+    # bug somewhere in gsc.py: contain multiple copies of augmented rules
+    # remove redundancy
+    rules0 = net.hg.g.get_rules()
+    rules = []
+    for rule in rules0:
+        if rule not in rules:
+            rules.append(rule)
+
+    labs = create_rule_labels(rules, add_prob=add_prob,
+                              suppress_pos=suppress_pos)
+
+    idx = (net.traces['t'] >= tmin) * (net.traces['t'] <= tmax)
+    actC_trace = net.traces['actC'][idx, :]
+    dp_all = compute_treelet_act_trace(net, actC_trace, rules, rname)
+
+    temp = np.argsort(dp_all.sum(axis=0))
+    focus_idx = temp[::-1][:num_treelets]
+    labs_focus = [labs[ii] for ii in focus_idx]
+
+    plt.plot(net.traces['t'][idx][::downsampling],
+             dp_all[::downsampling, focus_idx])
+    if legend_pos is not None:
+        plt.legend(labs_focus, loc=legend_pos)
+    else:
+        plt.legend(labs_focus)
+    plt.ylim(0, 1)
+    plt.xlabel('Time')
+    plt.ylabel('Treelet activation at {}'.format(rname))
+
+
+def create_rule_labels(rules, add_prob=False, suppress_pos=False):
+    labs = []
+    for rule in rules:
+        labs.append(rule2str(rule, add_prob=add_prob,
+                    suppress_pos=suppress_pos))
+
+    return labs
+
+
+def rule2str(rule, add_prob=False, suppress_pos=False):
+    '''Print a rule in a succinct form'''
+    str1 = ''
+
+    if not suppress_pos:
+        str1 += rule['m']
+        str1 += '('
+        if rule['d1'] is not None:
+            str1 += rule['d1']
+        str1 += ','
+        if rule['d2'] is not None:
+            str1 += rule['d2']
+        str1 += ')'
+    else:
+        str1 += rule['m'].split(':')[0]
+        str1 += '('
+        if rule['d1'] is not None:
+            str1 += rule['d1'].split(':')[0]
+        str1 += ','
+        if rule['d2'] is not None:
+            str1 += rule['d2'].split(':')[0]
+        str1 += ')'
+
+    if add_prob:
+        if rule['p'] is not None:
+            str1 += ' ({:.3f})'.format(rule['p'])
+
+    return str1
+
+
+def compute_treelet_act_trace(net, actC_trace, rules, rname):
+    #     rules = net.hg.g.get_rules()
+    treeletset = get_treelets(net, rules, rname)
+
+    # bug in Grammar --- redundant rules
+#     treeletset = set(tuple(treelet) for treelet in treeletset)
+#     treeletset = [list(treelet) for treelet in treeletset]
+
+    dp_all = []
+    for treelet in treeletset:
+        dp = compute_metric(net, actC_trace, treelet)
+        dp_all.append(dp)
+
+    return np.array(dp_all).T
+
+
+def get_treelet_frame(net, rname):
+    '''Return a list of roles that form a treelet whose mother position is `rname`'''
+    children = net.hg.roles.get_daughters(rname)
+    return [children['l'][0], children['r'][0], rname]
+
+
+def get_treelets(net, rules, rname):
+    '''Return all grammatical treelets at the position `rname`'''
+
+    roleset = get_treelet_frame(net, rname)
+    treelets = []
+
+    for rule in rules:
+
+        treelet = []
+
+        if rule['d1'] is not None:
+            treelet.append(rule['d1'] + '/' + roleset[0])
+
+        if rule['d2'] is not None:
+            treelet.append(rule['d2'] + '/' + roleset[1])
+
+        treelet.append(rule['m'] + '/' + roleset[2])
+        treelets.append(treelet)
+
+    return treelets
+
+
+def compute_metric(net, actC_trace, treelet):
+    '''Return a trace of the similarity distance from each activation state to 
+    the grid point of the treelet. The similarity distance is the normalized
+    dot product; this is equivalent to the average of the activation values of 
+    the constituent bindings of the treelet.'''
+    roles = []
+    for bname in treelet:
+        roles.append(bname.split('/')[1])
+
+    idx = net.find_bindings(treelet)
+    dp = actC_trace[:, idx].sum(axis=1) / len(roles)
+
+    return dp
+
+
+def convert_sentence(sent, term2word):
+
+    sent0 = []
+    for bname in sent:
+        fname, rname = bname.split('/')
+        if fname in term2word:
+            fnames = term2word[fname]
+        else:
+            print("Can't find {} in `term2word`".format(fname))
+
+        bnames = [fname + '/' + rname for fname in fnames]
+        sent0.append(bnames)
+
+    return sent0
+
+
+def test_parse_inc(net, dq, num_sent=None, num_trials=10,
+                   estr=2, estr_null=2, term2word=None,
+                   symmetric=False,
+                   decay_factor=0.5, scaling_factor=2,
+                   update_q_mask=True,
+                   update_scale_constants=False,
+                   use_multiple_timescale=False,
+                   wrapup_clear_input=False,
+                   null_input_extend_pos=True,
+                   null_input_extend_lv=True, disp=False):
+
+    if num_sent is None:
+        num_sent = len(net.corpus['sentence'])
+    else:
+        num_sent = min(num_sent, len(net.corpus['sentence']))
+    max_sent_len = net.hg.opts['max_sent_len']
+    res = {}
+
+    f_empty_type = net.hg.g.get_types(net.hg.opts['f_empty'])
+
+    net.qpolicy = dq.cumsum()
+    net.qpolicy = np.insert(net.qpolicy, 0, 0.)
+
+    for si in range(num_sent):
+
+        sent = net.corpus['sentence'][si]
+        targ = net.corpus['target'][si]
+        sent_acc = 0.
+
+        # Remove the empty position filler in 'sent'
+        sent0 = [bname for bname in sent
+                 if bname.split(net.hg.opts['bsep'])[0] not in f_empty_type]
+
+        if term2word is not None:
+            sent0 = convert_sentence(sent=sent0, term2word=term2word)
+
+        res[si] = {}
+        res[si]['sentence'] = sent0
+        res[si]['parse_corr'] = targ
+        res[si]['acc'] = 0.
+        res[si]['parse_incorr'] = []
+        # print(sent0)
+
+        for ti in range(num_trials):
+            net.run_sent(
+                sent0, decay_factor=decay_factor,
+                symmetric=symmetric,
+                update_q_mask=update_q_mask,
+                update_scale_constants=update_scale_constants,
+                use_multiple_timescale=use_multiple_timescale,
+                wrapup_clear_input=wrapup_clear_input,
+                null_input_extend_pos=null_input_extend_pos,
+                null_input_extend_lv=null_input_extend_lv, disp=disp)
+
+            net.set_discrete_state(net.read_grid_point())
+            if np.allclose(net.actC, targ):
+                sent_acc += 1.
+            else:
+                res[si]['parse_incorr'].append(net.actC)
+
+        res[si]['acc'] = sent_acc/num_trials
+        res[si]['parse_incorr'] = np.array(res[si]['parse_incorr'])
+
+        sent = ' '.join([bname.split('/')[0] for bname in sent])
+        print('Sentence {:d} ACC = {:.3f} ({:s})'.format(
+            si, res[si]['acc'], sent))
+
+    return res
 # =============================================================================
 # JAX-ACCELERATED TRIAL EXECUTION
 # =============================================================================
@@ -1921,6 +2248,30 @@ class GscNet():
 
         return corpus
 
+    def run_word(self, fname, wpos, symmetric=True, update_q_discrete=False, log_trace=False):
+
+        q_max_backup = self.opts['q_max']
+        bname = fname + self.hg.opts['bsep'] + '(1,%d)' % wpos
+        qinc = self.qpolicy[wpos] - self.qpolicy[wpos - 1]
+        self.opts['q_max'] = self.qpolicy[wpos]
+        # print(bname)
+        self.set_input(bname)
+        if self.train_opts['update_scale_constants']:
+            self.update_scale_constants(pos=wpos, symmetric=symmetric)
+        if update_q_discrete:
+            update_q = False
+            self.q = self.qpolicy[wpos] * np.ones(self.num_roles)
+        else:
+            update_q = True
+
+        if self.opts['use_runC']:
+            self.runC(
+                np.max(qinc) / self.opts['q_rate'], log_trace=log_trace, update_q=update_q)
+        else:
+            self.run(np.max(qinc) / self.opts['q_rate'],
+                     log_trace=log_trace, update_q=update_q)
+        self.opts['q_max'] = q_max_backup
+
     def run_wrapup(self, update_q_discrete=False, log_trace=False, clear_input=True):
         # self.opts['q_max'] = q_max
         dur = np.max(self.opts['q_max'] - self.q)
@@ -3529,113 +3880,6 @@ class GscNet():
         return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
  #####################################
  # PLOT
-
-    def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0., 1.],
-                          linewidth=1, legend=True, savefilename_prefix=None, log_y=False):
-
-        nsent_per_iteration = net.train_opts['num_trials'] + \
-            net.train_opts['parallel_parser_num_trials']
-
-        # Plot KL divergence
-        xval = np.arange(
-            len(net.traces_train['kl_trees'])) * nsent_per_iteration
-        # KL was computed using ema prob estimate (Do not smooth again)
-        plt.plot(xval, net.traces_train['kl_trees'], linewidth=linewidth)
-        plt.grid()
-        plt.xlabel('# of sentences', fontsize=15)
-        plt.ylabel('KL divergence', fontsize=15)
-        if ylim_kl is not None:
-            plt.ylim(ylim_kl)
-        plt.xticks(fontsize=15)
-        plt.yticks(fontsize=15)
-        plt.tight_layout()
-        if savefilename_prefix is not None:
-            plt.savefig(savefilename_prefix + '-kl.pdf')
-        # plt.show()
-
-        # Plot accuracy
-        xval = np.arange(len(net.traces_train['acc'])) * nsent_per_iteration
-        plt.plot(xval, smooth(
-            net.traces_train['acc'], weight=weight), linewidth=linewidth)
-        plt.ylim(0, 1)
-        plt.xlabel('# of sentences', fontsize=15)
-        plt.ylabel('Production accuracy', fontsize=15)
-        plt.grid()
-        if ylim_acc is not None:
-            plt.ylim(ylim_acc)
-        plt.xticks(fontsize=15)
-        plt.yticks(fontsize=15)
-        plt.tight_layout()
-        if savefilename_prefix is not None:
-            plt.savefig(savefilename_prefix + '-acc.pdf')
-        # plt.show()
-
-        if savefilename_prefix is None:
-            savefilename = None
-        else:
-            savefilename = savefilename_prefix + '-prob.pdf'
-        plot_prob_trees_trace(net, weight=weight, normalize=normalize,
-                              savefilename=savefilename, linewidth=linewidth, legend=legend, log_y=log_y)
-
-    def plot_prob_trees_trace(
-            net, normalize=False, weight=0.,
-            xunit=[None, 'num_trials'][1], savefilename=None,
-            legend=True, linewidth=1, log_y=False):
-
-        nsent_per_iteration = net.train_opts['num_trials'] + \
-            net.train_opts['parallel_parser_num_trials']
-
-        sent0 = []
-        for sent in net.corpus['sentence']:
-            sent0.append(' '.join([bname.split('/')[0] for bname in sent]))
-
-        ptarg = net.corpus['prob_sent']
-        yy = net.traces_train['prob_sent']
-
-        if xunit is None:
-            xx = np.arange(len(yy))
-            xlab = '# of updates'
-        elif xunit == 'num_trials':
-            # It is assumed that num_trials was fixed over the course of training
-            xx = np.arange(len(yy)) * nsent_per_iteration
-            xlab = '# of sentences'
-
-        if normalize:
-            acc = net.traces_train['acc']  # 2d-array
-            # first_nonzero = np.where(net.traces_train['acc'] > 0)[0][0]
-            yy = yy / (acc + 1e-15)  # prevent zero division
-
-        yy = smooth(yy, weight)
-
-        if log_y:
-            yy = np.log(yy)
-
-        for si, sent in enumerate(net.corpus['sentence']):
-            if log_y:
-                yy1 = np.log(ptarg[si])
-            else:
-                yy1 = ptarg[si]
-            plt.axhline(yy1, linestyle='--', c='C%d' % (si % 10))
-            plt.plot(xx, yy[:, si],  # / yy.sum(axis=1),
-                     label=sent0[si], color='C%d' % (si % 10), linewidth=linewidth)
-
-        ylab = 'Sentence probability'
-        if log_y:
-            ylab = 'Log sentence probability'
-
-        if normalize:
-            ylab += '\n(normalized)'
-        plt.ylabel(ylab, fontsize=15)
-        plt.xlabel(xlab, fontsize=15)
-        if legend:
-            plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-        plt.grid()
-        plt.xticks(fontsize=15)
-        plt.yticks(fontsize=15)
-        plt.tight_layout()
-        if savefilename is not None:
-            plt.savefig(savefilename)
-        # plt.show()
 
     def run_sent(self, sent, word_rt=None, use_multiple_timescale=False,
                  update_scale_constants=False, symmetric=True, scaling_factor=None,
