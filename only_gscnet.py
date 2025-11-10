@@ -487,6 +487,7 @@ class GscNet():
             # for role in roles.role_names:
             for ri in range(len(self.hg.role_names)):
                 # if roles.is_bracketed(role) == rule['br']:
+                role = roles.role_names[ri]
                 if self.hg.roles.role_is_bracketed[ri] == rule['br']:
                     # mother_roles = roles.get_mothers(role)
                     # focus_mother_roles = mother_roles[rule['rel']]
@@ -1927,6 +1928,7 @@ class GscNet():
                 self.hg.roles.role_is_terminal)[0]
             terminal_rnames = [self.role_names[ri]
                                for ri in rname_terminal_indices]
+            terminal_rnames = set(terminal_rnames)
             for key in keys_all:
                 # if key in self.find_roles(self.hg.roles.get_terminals()):
                 if key in set(terminal_rnames):
@@ -2346,7 +2348,7 @@ class GscNet():
 
             if 'free_update_null' in self.train_opts:
                 if self.train_opts['free_update_null']:
-                    idx_null = self.find_fillers(self.hg.g.opts['null'])
+                    idx_null = self.find_fillers_fast(self.hg.g.opts['null'])
                     bC_new[idx_null] = bC[idx_null]
 
             if 'add1_to_root' in self.hg.opts:

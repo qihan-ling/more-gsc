@@ -1200,11 +1200,11 @@ class BrickRole(object):
             if len(self.role_daughters_idx['r'][ri]) > 0:
                 self.role_daughter_r_idx[ri] = self.role_daughters_idx['r'][ri][0]
             if len(self.role_daughters_idx['m'][ri]) > 0:
-                self.role_daughter_r_idx[ri] = self.role_daughters_idx['m'][ri][0]
+                self.role_daughter_m_idx[ri] = self.role_daughters_idx['m'][ri][0]
             if len(self.role_daughters_idx['l0'][ri]) > 0:
-                self.role_daughter_r_idx[ri] = self.role_daughters_idx['l0'][ri][0]
+                self.role_daughter_l0_idx[ri] = self.role_daughters_idx['l0'][ri][0]
             if len(self.role_daughters_idx['r0'][ri]) > 0:
-                self.role_daughter_r_idx[ri] = self.role_daughters_idx['r0'][ri][0]
+                self.role_daughter_r0_idx[ri] = self.role_daughters_idx['r0'][ri][0]
 
         # Pre-compute mother relationships
         self.role_mothers_idx = {}
