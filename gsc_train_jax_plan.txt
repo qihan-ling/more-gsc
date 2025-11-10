@@ -1,0 +1,533 @@
+# Phase 2: Practical Implementation Guide
+# Step-by-Step JAX/GPU Integration
+
+"""
+This guide provides EXACT code changes to move your training to GPU.
+
+PREREQUISITE: Phase 1 + 1.5 completed
+
+TIME ESTIMATE: 1-2 hours for Phase 2A + 2B
+EXPECTED SPEEDUP: Additional 5-10x (on top of Phase 1 + 1.5)
+"""
+
+# ============================================================================
+# STEP 1: Add JAX Helper Functions (10 minutes)
+# ============================================================================
+"""
+Location: Add these after imports, before GscNet class definition
+Around line 140 in only_gscnet.py
+"""
+
+import only_gscnet as gsc
+import time
+import only_datastructure as ds
+if JAX_AVAILABLE:
+    from functools import partial
+
+    @partial(jit, static_argnums=(5, 6, 7, 8, 9))
+    def _adam_update_matrix_jax(W, dW, M, R, mask, lrate, beta1, beta2, eps, epoch_num):
+        """
+        JIT-compiled Adam update for weight matrix on GPU.
+
+        Args:
+            W: Current weights (JAX array on GPU)
+            dW: Gradients (JAX array on GPU)
+            M, R: Adam momentum states (JAX arrays on GPU)
+            mask: Update mask (JAX array on GPU or None)
+            lrate, beta1, beta2, eps, epoch_num: Scalars (static)
+
+        Returns:
+            Updated W, M, R (all on GPU)
+        """
+        # Update momentum
+        M = beta1 * M + (1.0 - beta1) * dW
+
+        # Update RMSprop
+        R = beta2 * R + (1.0 - beta2) * (dW ** 2)
+
+        # Bias correction
+        m_hat = M / (1.0 - beta1 ** epoch_num)
+        r_hat = R / (1.0 - beta2 ** epoch_num)
+
+        # Compute update
+        update = lrate * m_hat / (jnp.sqrt(r_hat) + eps)
+
+        # Apply mask if provided
+        if mask is not None:
+            update = update * mask
+
+        # Update weights
+        W_new = W + update
+
+        return W_new, M, R
+
+    @partial(jit, static_argnums=(3,))
+    def _sgd_update_matrix_jax(W, dW, mask, lrate):
+        """
+        JIT-compiled SGD update for weight matrix on GPU.
+        """
+        if mask is not None:
+            update = lrate * dW * mask
+        else:
+            update = lrate * dW
+        return W + update
+
+    @jit
+    def _compute_weight_decay_jax(W, W_ref, factor):
+        """
+        JIT-compiled weight decay computation on GPU.
+        """
+        return -factor * (W - W_ref)
+
+
+# ============================================================================
+# STEP 2: Modify __init__ to Use JAX Arrays (15 minutes)
+# ============================================================================
+"""
+Location: GscNet.__init__, lines 164-166
+
+BEFORE:
+    self.WC = np.zeros((self.num_bindings, self.num_bindings))
+    self.bC = np.zeros(self.num_bindings)
+    self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
+
+AFTER:
+"""
+
+
+def __init__(self, hg=None, encodings=None, opts=None, qpolicy=None, seed=None):
+    # ... existing code up to line 163 ...
+
+    # Add JAX option to opts
+    self._set_opts()  # This already exists
+    if opts is not None:
+        if 'use_jax' not in opts:
+            opts['use_jax'] = JAX_AVAILABLE  # Default: use JAX if available
+
+    # ... existing code through _add_change_of_basis_matrices() ...
+
+    # MODIFIED SECTION (replace lines 164-166):
+    t0 = time.time()
+
+    # Decide whether to use JAX
+    self.use_jax = JAX_AVAILABLE and self.opts.get('use_jax', True)
+
+    if self.use_jax:
+        print("Initializing weight matrices on GPU with JAX...")
+        # Use float32 for GPU efficiency (change to float64 if needed)
+        self.WC = jnp.zeros(
+            (self.num_bindings, self.num_bindings), dtype=jnp.float32)
+        self.bC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+        self.estr = jnp.ones(
+            self.num_bindings, dtype=jnp.float32) * self.opts['init_estr']
+    else:
+        print("Initializing weight matrices on CPU with NumPy...")
+        self.WC = np.zeros((self.num_bindings, self.num_bindings))
+        self.bC = np.zeros(self.num_bindings)
+        self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
+
+    if hg is not None:
+        self._build_model()
+        self._adjust_default_param_vals()
+        if self.opts['use_second_order_bias']:
+            self.bias2weight()
+
+    dur = time.time() - t0
+    print('{} s for initializing parameter values'.format(dur))
+
+    # Continue with existing code...
+    # Note: extC and actC can stay NumPy (they're temporary, small)
+    self.extC = np.zeros(self.num_bindings)
+    self.ext = self.C2N(actC=self.extC)
+    # ... rest of init ...
+
+
+# ============================================================================
+# STEP 3: Initialize Adam States on GPU (10 minutes)
+# ============================================================================
+"""
+Location: Where Adam optimizer is initialized
+This might be in a separate method. Add this initialization:
+"""
+
+
+def _initialize_adam_states(self):
+    """Initialize Adam optimizer states."""
+    if not hasattr(self, 'optim'):
+        self.optim = {}
+
+    if self.use_jax:
+        # Initialize on GPU
+        self.optim['M_WC'] = jnp.zeros_like(self.WC)
+        self.optim['R_WC'] = jnp.zeros_like(self.WC)
+        self.optim['M_bC'] = jnp.zeros_like(self.bC)
+        self.optim['R_bC'] = jnp.zeros_like(self.bC)
+    else:
+        # Initialize on CPU
+        self.optim['M_WC'] = np.zeros_like(self.WC)
+        self.optim['R_WC'] = np.zeros_like(self.WC)
+        self.optim['M_bC'] = np.zeros_like(self.bC)
+        self.optim['R_bC'] = np.zeros_like(self.bC)
+
+    # Hyperparameters
+    self.optim['beta1'] = 0.9
+    self.optim['beta2'] = 0.999
+    self.optim['eps'] = 1e-8
+
+
+"""
+Call this in __init__ or wherever you set up the optimizer
+"""
+
+
+# ============================================================================
+# STEP 4: Update train2() Weight Update Section (30 minutes)
+# ============================================================================
+"""
+Location: train2() method, lines 1246-1289
+
+This is the CRITICAL section - where most GPU speedup happens
+"""
+
+
+def train2(self, prefix_list=None, prefix_weights=None, train_opts=None,
+           savefilename=None, log_ema_stat=True):
+
+    # ... existing code up to weight update section ...
+
+    # MODIFIED SECTION (lines 1229-1289):
+    if self.train_opts['update_w']:
+
+        # Compute weight decay
+        if ('weight_decay' in self.train_opts) and self.train_opts['weight_decay']:
+            if self.train_opts['weight_decay_to'] == 'default':
+                ref = self.params_backup['WC']
+            else:
+                ref = self.average_weight2()
+
+            if self.use_jax:
+                # Ensure ref is on GPU
+                if not isinstance(ref, jnp.ndarray):
+                    ref = jnp.array(ref)
+                weight_decay = _compute_weight_decay_jax(
+                    self.WC, ref, self.train_opts['weight_decay_factor']
+                )
+            else:
+                weight_decay = - \
+                    self.train_opts['weight_decay_factor'] * (self.WC - ref)
+        else:
+            if self.use_jax:
+                weight_decay = jnp.zeros_like(self.WC)
+            else:
+                weight_decay = np.zeros(self.WC.shape)
+
+        # Convert gradients to JAX if needed
+        if self.use_jax:
+            if not isinstance(dWC, jnp.ndarray):
+                dWC = jnp.array(dWC)
+            if not isinstance(dbC, jnp.ndarray):
+                dbC = jnp.array(dbC)
+            if not isinstance(maskWC_update, jnp.ndarray):
+                maskWC_update = jnp.array(maskWC_update)
+            if not isinstance(maskbC_update, jnp.ndarray):
+                maskbC_update = jnp.array(maskbC_update)
+
+        # Update WC
+        if not (('bias2_only' in self.train_opts) and self.train_opts['bias2_only']):
+            if self.train_opts['optimizer'] == 'adam':
+                if self.use_jax:
+                    # JAX path: JIT-compiled, all on GPU
+                    self.WC, self.optim['M_WC'], self.optim['R_WC'] = _adam_update_matrix_jax(
+                        self.WC,
+                        dWC + weight_decay,  # Include weight decay in gradient
+                        self.optim['M_WC'],
+                        self.optim['R_WC'],
+                        maskWC_update,
+                        self.train_opts['lrate'],
+                        self.optim['beta1'],
+                        self.optim['beta2'],
+                        self.optim['eps'],
+                        self.epoch_num
+                    )
+                else:
+                    # NumPy path: Original code
+                    self.optim['M_WC'] = self.optim['beta1'] * self.optim['M_WC'] + \
+                        (1. - self.optim['beta1']) * dWC
+                    self.optim['R_WC'] = self.optim['beta2'] * self.optim['R_WC'] + \
+                        (1. - self.optim['beta2']) * dWC**2
+                    m_k_hat_WC = self.optim['M_WC'] / \
+                        (1. - self.optim['beta1']**self.epoch_num)
+                    r_k_hat_WC = self.optim['R_WC'] / \
+                        (1. - self.optim['beta2']**self.epoch_num)
+                    self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
+                        (np.sqrt(r_k_hat_WC) + self.optim['eps'])
+
+                self._set_weights()
+            else:
+                # SGD
+                if self.use_jax:
+                    self.WC = _sgd_update_matrix_jax(
+                        self.WC,
+                        dWC + weight_decay,
+                        maskWC_update,
+                        self.train_opts['lrate']
+                    )
+                else:
+                    self.WC += self.train_opts['lrate'] * \
+                        (dWC + weight_decay) * maskWC_update
+
+                self._set_weights()
+
+        # Update bC
+        if self.train_opts['bias1_only']:
+            if self.use_jax:
+                self.bC = _sgd_update_matrix_jax(
+                    self.bC, dbC, maskbC_update, self.train_opts['lrate']
+                )
+            else:
+                self.bC += self.train_opts['lrate'] * dbC * maskbC_update
+            self._set_biases()
+
+        if not self.opts['use_second_order_bias']:
+            if self.train_opts['optimizer'] == 'adam':
+                if self.use_jax:
+                    # Use vector version of Adam update
+                    self.bC, self.optim['M_bC'], self.optim['R_bC'] = _adam_update_matrix_jax(
+                        self.bC,
+                        dbC,
+                        self.optim['M_bC'],
+                        self.optim['R_bC'],
+                        maskbC_update,
+                        self.train_opts['lrate'],
+                        self.optim['beta1'],
+                        self.optim['beta2'],
+                        self.optim['eps'],
+                        self.epoch_num
+                    )
+                else:
+                    self.optim['M_bC'] = self.optim['beta1'] * self.optim['M_bC'] + \
+                        (1. - self.optim['beta1']) * dbC
+                    self.optim['R_bC'] = self.optim['beta2'] * self.optim['R_bC'] + \
+                        (1. - self.optim['beta2']) * dbC**2
+                    m_k_hat_bC = self.optim['M_bC'] / \
+                        (1. - self.optim['beta1']**self.epoch_num)
+                    r_k_hat_bC = self.optim['R_bC'] / \
+                        (1. - self.optim['beta2']**self.epoch_num)
+                    self.bC += self.train_opts['lrate'] * m_k_hat_bC / \
+                        (np.sqrt(r_k_hat_bC) + self.optim['eps'])
+                self._set_biases()
+            else:
+                # SGD (already handled above)
+                pass
+
+        # Update estr
+        if self.train_opts['update_estr']:
+            if self.use_jax:
+                if not isinstance(destr, jnp.ndarray):
+                    destr = jnp.array(destr)
+                self.estr = self.estr + self.train_opts['lrate'] * destr
+            else:
+                self.estr += self.train_opts['lrate'] * destr
+
+        # ... rest of training code ...
+
+
+# ============================================================================
+# STEP 5: Handle Gradient Conversion (15 minutes)
+# ============================================================================
+"""
+The gradients dWC, dbC are built on CPU from error dicts.
+We need to convert them to JAX arrays efficiently.
+
+Option A: Keep building on CPU, convert once at the end
+"""
+
+
+def cost_grad(self, err, extC_token):
+    # ... existing gradient building code ...
+    # This builds dWC, dbC as NumPy arrays
+
+    # At the very end, before return:
+    if self.use_jax:
+        # Convert to JAX arrays (CPU → GPU transfer happens here)
+        dWC = jnp.array(dWC)
+        dbC = jnp.array(dbC)
+        destr = jnp.array(destr)
+
+    return dWC, destr, dq, dbC
+
+
+"""
+This is the simplest approach. The CPU→GPU transfer of gradients
+is unavoidable but happens only once per iteration.
+"""
+
+
+# ============================================================================
+# STEP 6: Handle Methods That Access WC/bC (20 minutes)
+# ============================================================================
+"""
+Some methods like _set_weights(), average_weight(), etc. access WC.
+These need to handle both NumPy and JAX arrays.
+"""
+
+
+def _set_weights(self):
+    """Update derived weight representations."""
+    # If WC is JAX array, operations stay on GPU
+    # JAX arrays support most NumPy operations
+
+    # Example: If you have code like:
+    # self.W = self.C2N(actC=self.WC)
+
+    # It might need:
+    if self.use_jax:
+        # Convert to NumPy temporarily if C2N requires it
+        WC_cpu = np.array(self.WC)
+        self.W = self.C2N(actC=WC_cpu)
+    else:
+        self.W = self.C2N(actC=self.WC)
+
+
+"""
+For average_weight() and similar methods:
+- They can operate on JAX arrays directly (most NumPy ops work)
+- Only convert to NumPy when absolutely necessary
+- Keep result on GPU if it will be assigned back to self.WC
+"""
+
+
+# ============================================================================
+# STEP 7: Saving and Loading Models (10 minutes)
+# ============================================================================
+"""
+When saving models, convert JAX arrays to NumPy:
+"""
+
+
+def save_model(self, filename):
+    if self.use_jax:
+        # Convert GPU arrays to CPU for saving
+        params_to_save = {
+            'WC': np.array(self.WC),
+            'bC': np.array(self.bC),
+            'estr': np.array(self.estr),
+            # ... other params ...
+        }
+    else:
+        params_to_save = {
+            'WC': self.WC,
+            'bC': self.bC,
+            'estr': self.estr,
+        }
+
+    with open(filename, 'wb') as f:
+        pickle.dump(params_to_save, f)
+
+
+def load_model(self, filename):
+    with open(filename, 'rb') as f:
+        params = pickle.load(f)
+
+    if self.use_jax:
+        # Convert loaded NumPy arrays to JAX
+        self.WC = jnp.array(params['WC'])
+        self.bC = jnp.array(params['bC'])
+        self.estr = jnp.array(params['estr'])
+    else:
+        self.WC = params['WC']
+        self.bC = params['bC']
+        self.estr = params['estr']
+
+
+# ============================================================================
+# TESTING PHASE 2
+# ============================================================================
+"""
+After implementation, test with:
+"""
+
+
+# Create model
+hg = ds.HarmonicGrammar(pcfg=your_pcfg, root='S', max_sent_len=24)
+net = gsc.GscNet(hg=hg, opts={'use_jax': True})
+
+# Verify JAX is being used
+print(f"Using JAX: {net.use_jax}")
+print(f"WC type: {type(net.WC)}")  # Should be jaxlib.xla_extension.DeviceArray
+print(f"WC device: {net.WC.device()}")  # Should show GPU
+
+# Run one training step
+t0 = time.time()
+net.train2(num_epochs=1)
+print(f"First epoch (with JIT compilation): {time.time() - t0:.3f}s")
+
+t0 = time.time()
+net.train2(num_epochs=1)
+print(f"Second epoch (JIT cached): {time.time() - t0:.3f}s")
+
+# Compare with NumPy version
+net_cpu = gsc.GscNet(hg=hg, opts={'use_jax': False})
+t0 = time.time()
+net_cpu.train2(num_epochs=1)
+print(f"CPU version: {time.time() - t0:.3f}s")
+
+
+# ============================================================================
+# EXPECTED RESULTS
+# ============================================================================
+"""
+FIRST RUN:
+- Epoch 1: ~1-2s (JIT compilation overhead)
+- Epoch 2: ~0.03-0.06s (5-10x faster than Phase 1.5)
+
+GPU UTILIZATION:
+- Check with: nvidia-smi
+- Should see ~80-90% GPU utilization during training
+- Memory usage: ~8-10 GB on one GPU
+
+SPEEDUP CALCULATION:
+- Before Phase 2: 0.3s per epoch
+- After Phase 2: 0.03-0.06s per epoch
+- Speedup: 5-10x
+
+COMBINED WITH EARLIER PHASES:
+- Original: 2.5s per epoch
+- Phase 1 + 1.5 + 2: 0.03-0.06s per epoch
+- Total speedup: 40-80x! 🚀
+"""
+
+# ============================================================================
+# TROUBLESHOOTING
+# ============================================================================
+"""
+ISSUE: "CUDA out of memory"
+SOLUTION: Your matrices fit (8GB < 24GB), but if it happens:
+  - Reduce batch size in estimate_prob_inc_jax
+  - Use float32 instead of float64 (already recommended)
+  - Check for memory leaks (arrays not being freed)
+
+ISSUE: "First epoch very slow"
+SOLUTION: This is normal! JIT compilation happens on first run.
+  - First run: ~1-2s (compilation)
+  - Subsequent runs: ~0.03-0.06s (fast)
+
+ISSUE: "Results differ from NumPy version"
+SOLUTION: 
+  - Check dtype: JAX uses float32 by default, NumPy uses float64
+  - Small numerical differences are expected
+  - If differences are large (>1e-3), investigate
+
+ISSUE: "No speedup observed"
+SOLUTION:
+  - Check GPU utilization with nvidia-smi
+  - Verify arrays are actually on GPU: net.WC.device()
+  - Profile to find CPU↔GPU transfers: jax.profiler.trace()
+  - Make sure JIT functions are being called
+
+ISSUE: "_set_weights() fails with JAX arrays"
+SOLUTION:
+  - Identify which operations in _set_weights() need NumPy
+  - Convert: WC_cpu = np.array(self.WC) only when necessary
+  - Keep operations on GPU when possible
+"""
