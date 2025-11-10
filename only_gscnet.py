@@ -4,6 +4,7 @@ import sys
 import numbers
 import copy
 import pickle
+import matplotlib.pyplot as plt
 try:
     import jax
     import jax.numpy as jnp
@@ -15,6 +16,70 @@ except ImportError:
     JAX_AVAILABLE = False
     print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
 from only_datastructure_speedup import PCFG, Node, HarmonicGrammar, BrickRole
+
+
+def smooth(scalars, weight):  # Weight between 0 and 1
+    last = scalars[0]  # First value in the plot (first timestep)
+    smoothed = list()
+    for point in scalars:
+        smoothed_val = last * weight + \
+            (1 - weight) * point  # Calculate smoothed value
+        smoothed.append(smoothed_val)                        # Save it
+        # Anchor the last smoothed value
+        last = smoothed_val
+
+    return np.array(smoothed)
+
+
+def set_null_input(
+        net, pos, estr=1, extend_pos=False, extend_lv=False,
+        cumulative=False):  # , use_type=False):
+
+    if extend_lv:
+        lv = range(1, net.hg.opts['max_sent_len'] + 1)
+    else:
+        lv = [1]
+
+    bnames = []
+
+    for ll in lv:
+
+        if extend_pos:
+            pos0 = range(pos - ll + 1, net.hg.opts['max_sent_len'] - ll + 2)
+        else:
+            pos0 = [pos]
+
+        # print(ll, pos0)
+
+        for pp in pos0:
+
+            if pp >= 1:
+
+                rname = '({},{})'.format(ll, pp)
+
+                if (ll > 1) and (pp == 1):
+                    fname = net.hg.opts['f_root']
+
+                elif (ll > 1) and (pp > 1):
+                    fname = net.hg.opts['f_empty_copy']
+                else:
+                    fname = net.hg.opts['f_empty']
+
+                bname = fname + net.hg.opts['bsep'] + rname
+                bnames.append(bname)
+
+    # print(bnames)
+    net.estr_backup = net.estr.copy()
+    net.estr = np.ones(net.num_bindings) * estr
+    net.set_input(bnames, cumulative=cumulative, use_type=False)
+    net.estr = net.estr_backup.copy()
+
+
+def load_model(filename):
+    f = open(filename, 'rb')
+    net = pickle.load(f)
+    f.close()
+    return net
 
 
 def save_model(net, filename):
@@ -521,7 +586,8 @@ class GscNet():
 
         t0 = time.time()
         if self.hg is not None:
-            self._precompute_fast_lookups()
+            # self._precompute_fast_lookups()
+            self._precompute_fastER_lookups()
         # Add parameters ==========================================
         self.WC = np.zeros((self.num_bindings, self.num_bindings))
         self.bC = np.zeros(self.num_bindings)
@@ -561,6 +627,83 @@ class GscNet():
         else:
             self.qpolicy = qpolicy
         self.backup_parameters()
+
+    def _precompute_fastER_lookups(self):
+        '''Pre-compute index lookup structures for O(1) access.
+
+        OPTIMIZED VERSION:
+        - Combined role loop for role_to_binding + daughter indices
+        - Efficient dict comprehensions
+        - Complexity: O(R + F + B) where R=roles, F=fillers, B=bindings
+        '''
+        import time
+        t0 = time.time()
+
+        # Verify Phase 1 is complete
+        if not hasattr(self.hg.roles, 'role_name_to_idx'):
+            print("WARNING: BrickRole Phase 1 not found!")
+            return
+
+        num_roles = self.hg.num_roles
+        num_fillers = self.hg.num_fillers
+        num_bindings = self.hg.num_bindings
+
+        # ============ COMBINED LOOP: Role bindings + daughter indices ============
+
+        self.role_to_binding_indices = {}
+        self.role_daughter_binding_indices = {}
+
+        # Cache terminal status and daughter indices for faster access
+        role_is_terminal = self.hg.roles.role_is_terminal
+        daughter_l_idx = self.hg.roles.role_daughter_l_idx
+        daughter_r_idx = self.hg.roles.role_daughter_r_idx
+
+        for ri in range(num_roles):
+            # Build role→binding mapping
+            start = ri * num_fillers
+            end = start + num_fillers
+            binding_indices = np.arange(start, end, dtype=np.int32)
+            self.role_to_binding_indices[ri] = binding_indices
+
+            # Build daughter binding indices for non-terminal roles
+            if not role_is_terminal[ri]:
+                dl_idx = daughter_l_idx[ri]
+                dr_idx = daughter_r_idx[ri]
+
+                if dl_idx >= 0 and dr_idx >= 0:
+                    # Compute daughter binding indices using already-computed arrays
+                    self.role_daughter_binding_indices[ri] = {
+                        'l': np.arange(dl_idx * num_fillers,
+                                       (dl_idx + 1) * num_fillers,
+                                       dtype=np.int32),
+                        'r': np.arange(dr_idx * num_fillers,
+                                       (dr_idx + 1) * num_fillers,
+                                       dtype=np.int32),
+                        'self': binding_indices
+                    }
+
+        # ============ FILLER TO BINDING INDICES ============
+
+        # Can't combine with role loop (different iteration count)
+        self.filler_to_binding_indices = {
+            fi: np.arange(fi, num_bindings, num_fillers, dtype=np.int32)
+            for fi in range(num_fillers)
+        }
+
+        # ============ NAME TO INDEX MAPPINGS ============
+
+        # Reference existing mappings (no computation)
+        self.role_name_to_idx = self.hg.roles.role_name_to_idx
+        self.filler_name_to_idx = self.hg.g.filler_name_to_idx
+
+        # Build binding name→index mapping
+        self.binding_name_to_idx = {
+            name: bi for bi, name in enumerate(self.hg.binding_names)
+        }
+
+        elapsed = time.time() - t0
+        print(f"✓ GscNet fast lookups built in {elapsed:.3f}s "
+              f"({num_roles} roles, {num_fillers} fillers, {num_bindings} bindings)")
 
     def _precompute_fast_lookups(self):
         '''Pre-compute index lookup structures for O(1) access.'''
@@ -1026,9 +1169,12 @@ class GscNet():
                     # lv, pos = roles.str2tuple(rname)
                     lv, pos = roles.role_tuples[ri]
                     if lv != 1:
-                        bnames = [f + bsep + rname
-                                  for f in self.hg.g.get_fillers()
-                                  if self.hg.g.is_terminal(f)]
+                        # bnames = [f + bsep + rname
+                        #           for f in self.hg.g.get_fillers()
+                        #           if self.hg.g.is_terminal(f)]
+                        terminal_fi = np.where(self.hg.g.filler_is_terminal)[0]
+                        bnames = [self.hg.g.filler_names[fi] +
+                                  bsep + rname for fi in terminal_fi]
                         self.set_bias(
                             bnames, H_terminal_illegitimate, c2n=False)
 
@@ -1040,10 +1186,18 @@ class GscNet():
                     # lv, pos = roles.str2tuple(rname)
                     lv, pos = roles.role_tuples[ri]
                     if lv == 1:
-                        bnames = [f + bsep + rname
-                                  for f in self.hg.g.get_fillers()
-                                  if (not self.hg.g.is_terminal(f) and
-                                      f != self.hg.g.opts['null'])]
+                        # bnames = [f + bsep + rname
+                        #           for f in self.hg.g.get_fillers()
+                        #           if (not self.hg.g.is_terminal(f) and
+                        #               f != self.hg.g.opts['null'])]
+                        null_idx = self.hg.g.filler_name_to_idx.get(
+                            self.hg.g.opts['null'], -1)
+                        nonterminal_fi = np.where(
+                            ~self.hg.g.filler_is_terminal)[0]
+                        if null_idx >= 0:
+                            nonterminal_fi = nonterminal_fi[nonterminal_fi != null_idx]
+                        bnames = [self.hg.g.filler_names[fi] +
+                                  bsep + rname for fi in nonterminal_fi]
                         self.set_bias(
                             bnames, H_nonterminal_illegitimate, c2n=False)
 
@@ -1055,9 +1209,12 @@ class GscNet():
                     # lv, pos = roles.str2tuple(rname)
                     lv, pos = roles.role_tuples[ri]
                     if lv == 1:
-                        bnames = [f + bsep + rname
-                                  for f in self.hg.g.get_fillers()
-                                  if self.hg.g.is_copy(f)]
+                        # bnames = [f + bsep + rname
+                        #           for f in self.hg.g.get_fillers()
+                        #           if self.hg.g.is_copy(f)]
+                        copy_fi = np.where(self.hg.g.filler_is_copy)[0]
+                        bnames = [self.hg.g.filler_names[fi] +
+                                  bsep + rname for fi in copy_fi]
                         self.set_bias(bnames, H_copy_illegitimate, c2n=False)
 
         self._set_weights()
@@ -1697,14 +1854,22 @@ class GscNet():
                 else:
                     stat['bindings'][bid] += p
 
-            for role in self.role_names:
-                if not self.hg.roles.is_terminal(role):
-                    daughters = self.hg.roles.get_daughters(role)
-                    l = daughters['l']
-                    r = daughters['r']
-                    idx = self.find_roles(role)
-                    idx_l = self.find_roles(l)
-                    idx_r = self.find_roles(r)
+            # for role in self.role_names:
+            #     if not self.hg.roles.is_terminal(role):
+            #         daughters = self.hg.roles.get_daughters(role)
+            #         l = daughters['l']
+            #         r = daughters['r']
+            #         idx = self.find_roles(role)
+            #         idx_l = self.find_roles(l)
+            #         idx_r = self.find_roles(r)
+            for ri in range(self.hg.num_roles):
+                if not self.hg.roles.role_is_terminal[ri]:  # O(1) - GOOD!
+                    # O(1) - GOOD!
+                    daughters_info = self.role_daughter_binding_indices[ri]
+                    if daughters_info:
+                        idx = daughters_info['self']    # O(1) - GOOD!
+                        idx_l = daughters_info['l']      # O(1) - GOOD!
+                        idx_r = daughters_info['r']
                     f_m = np.argmax(state[idx])
                     f_l = np.argmax(state[idx_l])
                     f_r = np.argmax(state[idx_r])
@@ -3362,3 +3527,227 @@ class GscNet():
         ssq = np.sum(actCmat ** 2, axis=0)
         hgrad_q1 = -4 * self.opts['m'] * actC * self.extend_rvec(rvec=ssq - 1)
         return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
+ #####################################
+ # PLOT
+
+    def plot_train_result(net, weight=0., normalize=False, ylim_kl=None, ylim_acc=[0., 1.],
+                          linewidth=1, legend=True, savefilename_prefix=None, log_y=False):
+
+        nsent_per_iteration = net.train_opts['num_trials'] + \
+            net.train_opts['parallel_parser_num_trials']
+
+        # Plot KL divergence
+        xval = np.arange(
+            len(net.traces_train['kl_trees'])) * nsent_per_iteration
+        # KL was computed using ema prob estimate (Do not smooth again)
+        plt.plot(xval, net.traces_train['kl_trees'], linewidth=linewidth)
+        plt.grid()
+        plt.xlabel('# of sentences', fontsize=15)
+        plt.ylabel('KL divergence', fontsize=15)
+        if ylim_kl is not None:
+            plt.ylim(ylim_kl)
+        plt.xticks(fontsize=15)
+        plt.yticks(fontsize=15)
+        plt.tight_layout()
+        if savefilename_prefix is not None:
+            plt.savefig(savefilename_prefix + '-kl.pdf')
+        # plt.show()
+
+        # Plot accuracy
+        xval = np.arange(len(net.traces_train['acc'])) * nsent_per_iteration
+        plt.plot(xval, smooth(
+            net.traces_train['acc'], weight=weight), linewidth=linewidth)
+        plt.ylim(0, 1)
+        plt.xlabel('# of sentences', fontsize=15)
+        plt.ylabel('Production accuracy', fontsize=15)
+        plt.grid()
+        if ylim_acc is not None:
+            plt.ylim(ylim_acc)
+        plt.xticks(fontsize=15)
+        plt.yticks(fontsize=15)
+        plt.tight_layout()
+        if savefilename_prefix is not None:
+            plt.savefig(savefilename_prefix + '-acc.pdf')
+        # plt.show()
+
+        if savefilename_prefix is None:
+            savefilename = None
+        else:
+            savefilename = savefilename_prefix + '-prob.pdf'
+        plot_prob_trees_trace(net, weight=weight, normalize=normalize,
+                              savefilename=savefilename, linewidth=linewidth, legend=legend, log_y=log_y)
+
+    def plot_prob_trees_trace(
+            net, normalize=False, weight=0.,
+            xunit=[None, 'num_trials'][1], savefilename=None,
+            legend=True, linewidth=1, log_y=False):
+
+        nsent_per_iteration = net.train_opts['num_trials'] + \
+            net.train_opts['parallel_parser_num_trials']
+
+        sent0 = []
+        for sent in net.corpus['sentence']:
+            sent0.append(' '.join([bname.split('/')[0] for bname in sent]))
+
+        ptarg = net.corpus['prob_sent']
+        yy = net.traces_train['prob_sent']
+
+        if xunit is None:
+            xx = np.arange(len(yy))
+            xlab = '# of updates'
+        elif xunit == 'num_trials':
+            # It is assumed that num_trials was fixed over the course of training
+            xx = np.arange(len(yy)) * nsent_per_iteration
+            xlab = '# of sentences'
+
+        if normalize:
+            acc = net.traces_train['acc']  # 2d-array
+            # first_nonzero = np.where(net.traces_train['acc'] > 0)[0][0]
+            yy = yy / (acc + 1e-15)  # prevent zero division
+
+        yy = smooth(yy, weight)
+
+        if log_y:
+            yy = np.log(yy)
+
+        for si, sent in enumerate(net.corpus['sentence']):
+            if log_y:
+                yy1 = np.log(ptarg[si])
+            else:
+                yy1 = ptarg[si]
+            plt.axhline(yy1, linestyle='--', c='C%d' % (si % 10))
+            plt.plot(xx, yy[:, si],  # / yy.sum(axis=1),
+                     label=sent0[si], color='C%d' % (si % 10), linewidth=linewidth)
+
+        ylab = 'Sentence probability'
+        if log_y:
+            ylab = 'Log sentence probability'
+
+        if normalize:
+            ylab += '\n(normalized)'
+        plt.ylabel(ylab, fontsize=15)
+        plt.xlabel(xlab, fontsize=15)
+        if legend:
+            plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+        plt.grid()
+        plt.xticks(fontsize=15)
+        plt.yticks(fontsize=15)
+        plt.tight_layout()
+        if savefilename is not None:
+            plt.savefig(savefilename)
+        # plt.show()
+
+    def run_sent(self, sent, word_rt=None, use_multiple_timescale=False,
+                 update_scale_constants=False, symmetric=True, scaling_factor=None,
+                 update_q_mask=True, decay_factor=0., wrapup_clear_input=False,
+                 use_type=True, disp=True,
+                 null_input_extend_pos=True, null_input_extend_lv=True,
+                 estr_null=2.0, plot_state=False):
+
+        word_rt0 = []
+        for ii, bname in enumerate(sent):
+            word_rt0.append(
+                (self.qpolicy[ii + 1] - self.qpolicy[ii]) / self.opts['q_rate'])
+
+        if word_rt is not None:
+            assert len(sent) == len(word_rt)
+        else:
+            word_rt = word_rt0.copy()
+
+        if 'look_ahead' not in self.opts:
+            look_ahead = 0
+        else:
+            look_ahead = self.opts['look_ahead']
+
+        maxlen = self.hg.opts['max_sent_len']
+        if scaling_factor is None:
+            scaling_factor = self.opts['scaling_factor']
+
+        if not update_q_mask:
+            self.update_q_mask(pos=0)
+
+        self.reset(mu=self.ep, sd=0.02)
+        if use_multiple_timescale:
+            self.opts['scaling_factor'] = 0.5
+            print('Scaling_factor =', self.opts['scaling_factor'])
+            self.update_scale_constants(lv=1, pos=999, scale_type='lv')
+
+        for ii, bname in enumerate(sent):
+            # self.clear_input()
+            if update_scale_constants:
+                self.update_scale_constants(pos=ii + 1, symmetric=symmetric)
+                # heatmap(self.vec2mat(self.scale_constants), xticklabels='', yticklabels='')
+                # self.read_state(self.scale_constants)
+            # self.plot_state(self.scale_constants)
+            if update_q_mask:
+                if hasattr(self, 'update_q_mask'):
+                    self.update_q_mask(pos=ii + 1 + look_ahead)
+
+            self.extC *= decay_factor
+            self.set_input(bname, use_type=use_type, cumulative=True)
+            if self.opts['use_runC']:
+                if word_rt[ii] <= word_rt0[ii]:
+                    self.runC(word_rt[ii])
+                else:
+                    self.runC(word_rt0[ii])
+                    self.opts['q_rate'] = 0.
+                    self.runC(word_rt[ii] - word_rt0[ii])
+                    self.opts['q_rate'] = 1.
+            else:
+                if word_rt[ii] <= word_rt0[ii]:
+                    self.run(word_rt[ii])
+                else:
+                    self.run(word_rt0[ii])
+                    self.opts['q_rate'] = 0.
+                    self.run(word_rt[ii] - word_rt0[ii])
+                    self.opts['q_rate'] = 1.
+
+            if plot_state:
+                self.plot_tree(figsize=(18, 6))
+
+            # heatmap(self.vec2mat(self.extC), xticklabels='', yticklabels='')
+            # heatmap(self.vec2mat(self.scale_constants), xticklabels='', yticklabels='')
+            # print(ii + 1, bname)
+            # self.plot_trace('scale_constants')
+            # plt.show()
+
+        # heatmap(self.vec2mat(self.scale_constants))
+
+        # temporary
+        if 'decay_last' in self.opts:
+            if self.opts['decay_last']:
+                self.extC *= decay_factor
+            else:
+                pass
+        else:
+            self.extC *= decay_factor
+
+        if wrapup_clear_input:
+            self.clear_input()
+        if update_scale_constants:
+            self.update_scale_constants(pos=0)
+        else:
+            if use_multiple_timescale:
+                self.update_scale_constants(pos=0)
+        if update_q_mask:
+            if hasattr(self, 'update_q_mask'):
+                self.update_q_mask(pos=0)
+
+        if len(sent) < maxlen:
+            # null_input = [self.hg.opts['f_empty'] + self.hg.opts['bsep'] + '(1,{})'.format(jj)
+            #               for jj in range(len(sent) + 1, maxlen + 1)]
+            # self.set_input(null_input, use_type=False, cumulative=True)
+            set_null_input(self, estr=estr_null, pos=len(sent) + 1,
+                           extend_pos=null_input_extend_pos, extend_lv=null_input_extend_lv,
+                           cumulative=True)  # CHECK
+
+            # print(null_input)
+        if self.opts['use_runC']:
+            # self.runC((self.opts['q_max'] - self.qpolicy[:ii+1].sum()) / self.opts['q_rate'])
+            self.runC((self.opts['q_max'] - min(self.q)) / self.opts['q_rate'])
+        else:
+            # self.run((self.opts['q_max'] - self.qpolicy[:ii+1].sum()) / self.opts['q_rate'])
+            self.run((self.opts['q_max'] - min(self.q)) / self.opts['q_rate'])
+        if disp:
+            print(sent)
+            self.plot_tree2(scale=1.5)

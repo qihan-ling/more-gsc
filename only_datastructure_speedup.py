@@ -90,10 +90,15 @@ class PCFG():
         self._cnf2hnf()
         # self._tokenize_cnf()
         self._tokenize_cnf_optimized()
-        self._tokenize_fillers()
+        print("DEBUG1")
+        # self._tokenize_fillers()
+        self._tokenize_fillers_optimized()
+        print("DEBUG2")
         self._sort_rules()
         # lookup will still be very sloe for 10K grammar
-        self._create_fast_lookups_pcfg()
+        print("DEBUG3")
+        # self._create_fast_lookups_pcfg()
+        self._create_fastER_lookups_pcfg()
 
     def _set_opts(self):
         # the default setting
@@ -291,6 +296,131 @@ class PCFG():
             self.rules = rules_new
             self._add_names()
 
+    def _tokenize_fillers_optimized(self):
+        """Replace filler symbols with position-specific filler symbols.
+
+        OPTIMIZED VERSION - O(n) instead of O(n²)
+        """
+        import time
+
+        if self.opts['use_pos_f']:
+            t0 = time.time()
+
+            sep = self.opts['sep']
+            role_names = self.opts['pos_f']
+
+            rules = self.rules.copy()
+            mothers = unique([rule['m'] for rule in rules])
+
+            # ==================== OPTIMIZATION 1: Build lookup structures ====================
+            # Pre-group rules by where each symbol appears (O(n) preprocessing)
+            rules_with_d1 = {}  # symbol -> [rules where d1 == symbol]
+            rules_with_d2 = {}  # symbol -> [rules where d2 == symbol]
+            unary_rule_indices = set()  # Track which rules are unary
+
+            for i, rule in enumerate(rules):
+                # Cache unary status
+                if rule.get('d2') is None:
+                    unary_rule_indices.add(i)
+
+                # Build d1 lookup
+                if rule['d1'] is not None:
+                    if rule['d1'] not in rules_with_d1:
+                        rules_with_d1[rule['d1']] = []
+                    rules_with_d1[rule['d1']].append((i, rule))
+
+                # Build d2 lookup
+                if rule.get('d2') is not None:
+                    if rule['d2'] not in rules_with_d2:
+                        rules_with_d2[rule['d2']] = []
+                    rules_with_d2[rule['d2']].append((i, rule))
+
+            print(f"    Built lookup structures in {time.time()-t0:.3f}s")
+            # ================================================================================
+
+            # ==================== OPTIMIZATION 2: Build type->token mapping =================
+            type_token_dict = {}  # mother -> list of tokens
+
+            for mother in mothers:
+                tokens = []
+
+                # Use lookup dicts instead of scanning all rules
+                for i, rule in rules_with_d1.get(mother, []):
+                    if i in unary_rule_indices:  # O(1) check
+                        tokens.append(rule['d1'] + sep + role_names[2])
+                    else:
+                        tokens.append(rule['d1'] + sep + role_names[0])
+
+                for i, rule in rules_with_d2.get(mother, []):
+                    if i not in unary_rule_indices:  # O(1) check
+                        tokens.append(rule['d2'] + sep + role_names[1])
+
+                if self.get_types(mother)[0] in self.root:
+                    tokens.append(mother + sep + role_names[0])
+
+                # Remove duplicates and store
+                type_token_dict[mother] = list(set(tokens))
+
+            print(f"    Built type->token mapping in {time.time()-t0:.3f}s")
+            # ================================================================================
+
+            # ==================== OPTIMIZATION 3: Generate new rules with set dedup =========
+            rules_new = []
+            rules_seen = set()  # Use set for O(1) deduplication
+
+            for i, rule in enumerate(rules):
+                # O(1) dict lookup instead of O(n) list comprehension
+                tokens = type_token_dict.get(rule['m'], [])
+                if len(tokens) == 0:
+                    tokens = [rule['m']]
+
+                for token in tokens:
+                    if i in unary_rule_indices:  # O(1) check
+                        d1_new = rule['d1'] + sep + role_names[2]
+
+                        # Create hashable key for deduplication
+                        rule_key = (token, d1_new, None, rule['p'])
+
+                        if rule_key not in rules_seen:  # O(1) set lookup
+                            rules_seen.add(rule_key)
+                            rules_new.append({
+                                'm': token,
+                                'd1': d1_new,
+                                'd2': None,
+                                'p': rule['p']
+                            })
+
+                    else:  # Binary rule
+                        d1_new = rule['d1'] + sep + \
+                            role_names[0] if rule['d1'] is not None else None
+                        d2_new = rule['d2'] + sep + \
+                            role_names[1] if rule['d2'] is not None else None
+
+                        rule_key = (token, d1_new, d2_new, rule['p'])
+
+                        if rule_key not in rules_seen:  # O(1) set lookup
+                            rules_seen.add(rule_key)
+                            rules_new.append({
+                                'm': token,
+                                'd1': d1_new,
+                                'd2': d2_new,
+                                'p': rule['p']
+                            })
+
+            print(
+                f"    Generated {len(rules_new)} rules in {time.time()-t0:.3f}s")
+            # ================================================================================
+
+            # Add separator to root symbols if needed
+            for rule in rules_new:
+                if self.opts['sep'] not in rule['m']:
+                    rule['m'] += sep + role_names[0]
+
+            self.rules = rules_new
+            self._add_names()
+
+            print(f"    _tokenize_fillers completed in {time.time()-t0:.3f}s")
+
     def _tokenize_fillers(self):
         # Replace filler symbols with position-specific filler symbols
 
@@ -394,6 +524,86 @@ class PCFG():
             expansion_rules, key=lambda x: x['m'])
 
         self.rules = non_copy_rules_sorted + copy_rules_sorted + expansion_rules_sorted
+
+    def _create_fastER_lookups_pcfg(self):
+        '''Pre-compute lookup arrays for PCFG filler operations.
+
+        Creates cached arrays for fast filler property checks during training.
+
+        OPTIMIZED VERSION:
+        - Single pass through fillers instead of 5 separate passes
+        - Pre-computed sets for O(1) lookups instead of calling expensive methods
+        - Complexity: O(N + R) instead of O(N² × R)
+        '''
+        import time
+        t0 = time.time()
+
+        num_fillers = len(self.filler_names)
+        num_rules = len(self.rules)
+
+        # ==================== PHASE 1: Pre-compute sets (O(N + R)) ====================
+
+        # 1. Build nonterminal set (O(R))
+        nonterminal_set = set(rule['m'] for rule in self.rules)
+
+        # 2. Cache filler types if needed (O(N))
+        #    Only compute if we need them for terminal check
+        root_types = set(self.root)
+        null_symbol = self.opts['null']
+
+        # Build filler type cache
+        filler_types = {}
+        for fname in self.filler_names:
+            filler_types[fname] = self.get_types(fname)[0]
+
+        # 3. Build terminal set (O(N))
+        #    Terminal = not nonterminal AND not null AND type not in root
+        terminal_set = {
+            fname for fname in self.filler_names
+            if (fname not in nonterminal_set and
+                fname != null_symbol and
+                filler_types[fname] not in root_types)
+        }
+
+        # 4. Build bracketed set (O(R))
+        bracketed_set = set()
+        if self.opts['use_hnf']:
+            copy_symbol = self.opts['copy']
+            for rule in self.rules:
+                if (rule.get('d2') is None and              # Unary rule
+                    rule['m'] != rule['d1'] and             # Not identity
+                        rule['m'] != rule['d1'] + copy_symbol):  # Not copy rule
+                    bracketed_set.add(rule['d1'])
+
+        # 5. Build root set (already have this, just ensure it's a set)
+        roots_set = set(self.get_roots())
+
+        # 6. Cache copy symbol
+        copy_symbol = self.opts['copy']
+
+        # ==================== PHASE 2: Single pass through fillers (O(N)) ====================
+
+        # Pre-allocate arrays
+        self.filler_is_terminal = np.empty(num_fillers, dtype=bool)
+        self.filler_is_copy = np.empty(num_fillers, dtype=bool)
+        self.filler_is_bracketed = np.empty(num_fillers, dtype=bool)
+        self.filler_is_root = np.empty(num_fillers, dtype=bool)
+
+        # Single pass with O(1) set lookups
+        self.filler_name_to_idx = {}
+        for i, fname in enumerate(self.filler_names):
+            # Build index mapping
+            self.filler_name_to_idx[fname] = i
+
+            # All property checks are now O(1) set membership tests
+            self.filler_is_terminal[i] = fname in terminal_set
+            self.filler_is_copy[i] = copy_symbol in fname
+            self.filler_is_bracketed[i] = fname in bracketed_set
+            self.filler_is_root[i] = fname in roots_set
+
+        elapsed = time.time() - t0
+        print(
+            f"    Fast lookups built in {elapsed:.3f}s ({num_fillers} fillers, {num_rules} rules)")
 
     def _create_fast_lookups_pcfg(self):
         '''Pre-compute lookup arrays for PCFG filler operations.
@@ -1079,6 +1289,95 @@ class BrickRole(object):
                 row_idx += 1
 
         self.role_names = rnames_all
+
+    def _create_fastER_lookups(self):
+        '''Pre-compute lookup arrays for O(1) access during training.
+
+        OPTIMIZED VERSION:
+        - Single pass for role_tuples + name_to_idx + property arrays
+        - Efficient daughter/mother relationship building
+        - Complexity: O(N) for properties + O(N×D) for relationships
+        '''
+        import time
+        t0 = time.time()
+
+        num_roles = len(self.role_names)
+
+        # ============ PHASE 1: Single pass for all per-role properties ============
+
+        # Pre-allocate arrays
+        self.role_tuples = np.empty((num_roles, 2), dtype=np.int32)
+        self.role_is_terminal = np.empty(num_roles, dtype=bool)
+        self.role_is_bracketed = np.empty(num_roles, dtype=bool)
+        self.role_name_to_idx = {}
+
+        # Single loop: build everything that depends only on role name
+        for ri, rname in enumerate(self.role_names):
+            # Index mapping
+            self.role_name_to_idx[rname] = ri
+
+            # Parse tuple (do this ONCE per role)
+            lv, pos = self.str2tuple(rname)
+            self.role_tuples[ri, 0] = lv
+            self.role_tuples[ri, 1] = pos
+
+            # Derive properties directly from tuple (no additional method calls)
+            self.role_is_terminal[ri] = (lv == 1)
+            self.role_is_bracketed[ri] = (lv < 0)
+
+        # ============ PHASE 2: Daughter and mother relationships ============
+
+        # Initialize structures
+        self.role_daughters_idx = {
+            pos_type: [[] for _ in range(num_roles)]
+            for pos_type in self.opts['pos_d']
+        }
+
+        self.role_mothers_idx = {
+            pos_type: [[] for _ in range(num_roles)]
+            for pos_type in self.opts['pos_m']
+        }
+
+        # Build relationships (can't avoid this loop if get_daughters/mothers is necessary)
+        for ri, rname in enumerate(self.role_names):
+            # Get daughters
+            daughters = self.get_daughters(rname)
+            for pos_type, daughter_names in daughters.items():
+                # Batch convert names to indices using pre-built mapping
+                self.role_daughters_idx[pos_type][ri] = [
+                    self.role_name_to_idx[dname]
+                    for dname in daughter_names
+                    if dname in self.role_name_to_idx
+                ]
+
+            # Get mothers
+            mothers = self.get_mothers(rname)
+            for pos_type, mother_names in mothers.items():
+                # Batch convert names to indices
+                self.role_mothers_idx[pos_type][ri] = [
+                    self.role_name_to_idx[mname]
+                    for mname in mother_names
+                    if mname in self.role_name_to_idx
+                ]
+
+        # ============ PHASE 3: Simplified arrays for common access patterns ============
+
+        self.role_daughter_l_idx = np.full(num_roles, -1, dtype=np.int32)
+        self.role_daughter_r_idx = np.full(num_roles, -1, dtype=np.int32)
+
+        # Vectorize this extraction (faster than individual assignments)
+        for ri in range(num_roles):
+            l_daughters = self.role_daughters_idx['l'][ri]
+            r_daughters = self.role_daughters_idx['r'][ri]
+
+            if l_daughters:
+                self.role_daughter_l_idx[ri] = l_daughters[0]
+            if r_daughters:
+                self.role_daughter_r_idx[ri] = r_daughters[0]
+
+        elapsed = time.time() - t0
+        print(
+            f"    BrickRole fast lookups built in {elapsed:.3f}s ({num_roles} roles)")
 
     def _create_fast_lookups(self):
         '''Pre-compute lookup arrays for O(1) access during training.
