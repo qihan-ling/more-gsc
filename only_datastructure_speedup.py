@@ -86,21 +86,14 @@ class PCFG():
         self.root = root
 
         self.pcfg_str = pcfg
-        print("DEBUG-PCFG1")
         self._cnf()
-        print("DEBUG-PCFG2")
         self._cnf2hnf()
-        print("DEBUG-PCFG3")
         # self._tokenize_cnf()
         self._tokenize_cnf_optimized()
-        print("DEBUG-PCFG4")
         self._tokenize_fillers()
-        print("DEBUG-PCFG5")
         self._sort_rules()
-        print("DEBUG-PCFG6")
         # lookup will still be very sloe for 10K grammar
         self._create_fast_lookups_pcfg()
-        print("DEBUG-PCFG7")
 
     def _set_opts(self):
         # the default setting
@@ -209,100 +202,42 @@ class PCFG():
         self._add_names()
 
     def _tokenize_cnf_optimized(self):
-        """Optimized version of _tokenize_cnf for large grammars"""
-
         if not self.opts['use_hnf']:
-
-            t_start = time.time()
-            num_input_rules = len(self.rules)
-            print(f"Tokenizing CNF with {num_input_rules} input rules...")
-
-            # Step 1: Build lookup dictionaries (O(n) - do once instead of O(n²))
-            print("  Building lookup tables...")
             t0 = time.time()
+            # Separate rules by type once
+            unary_rules = [r for r in self.rules if r['d2'] is None]
+            binary_rules = [r for r in self.rules if r['d2'] is not None]
 
             mothers = set(rule['m'] for rule in self.rules)
+            sym_prob = {rule['d1']: rule['p'] for rule in unary_rules}
 
-            # Map: mother symbol -> list of daughters (for first position)
-            mother_to_daughters = defaultdict(list)
-            for rule in self.rules:
-                if rule['d2'] is None:  # Unary rule
-                    continue
-                mother_to_daughters[rule['m']].append(rule['d1'])
+            # Build lookup from unary rules only
+            mother_to_children = {}
+            for rule in unary_rules:
+                mother_to_children.setdefault(rule['m'], []).append(rule['d1'])
 
-            # Build sym_prob dictionary (probabilities for unary rules)
-            sym_prob = {}
-            for rule in self.rules:
-                if rule['d2'] is None:
-                    sym_prob[rule['d1']] = rule['p']
-
-            print(f"    Lookup tables built in {time.time()-t0:.2f}s")
-            print(f"    Found {len(mothers)} unique mother symbols")
-
-            # Step 2: Expand rules using lookup dictionaries
-            print("  Expanding rules...")
-            t0 = time.time()
-
-            # Use set of tuples for O(1) duplicate detection
-            rules_set = set()
+            rules_seen = set()
             rules_new = []
 
-            processed_count = 0
-            report_interval = max(1, num_input_rules // 10)  # Report every 10%
+            for rule in binary_rules:
+                d1_syms = mother_to_children.get(rule['d1'], [rule['d1']])
+                d2_syms = mother_to_children.get(rule['d2'], [rule['d2']])
 
-            for rule in self.rules:
-                if rule['d2'] is not None:  # Binary rule only
+                for d1_sym in d1_syms:
+                    for d2_sym in d2_syms:
+                        p = (sym_prob.get(rule['m'], 1.0) *
+                             sym_prob.get(d1_sym, 1.0) *
+                             sym_prob.get(d2_sym, 1.0))
 
-                    # Look up daughters using pre-built dictionary (O(1))
-                    if rule['d1'] in mothers:
-                        d1_syms = mother_to_daughters[rule['d1']]
-                    else:
-                        d1_syms = [rule['d1']]
-
-                    if rule['d2'] in mothers:
-                        d2_syms = mother_to_daughters[rule['d2']]
-                    else:
-                        d2_syms = [rule['d2']]
-
-                    # Create expanded rules (this is still O(k²) where k = avg daughters)
-                    for d1_sym in d1_syms:
-                        for d2_sym in d2_syms:
-                            # Calculate probability
-                            p = 1.0
-                            for sym in [rule['m'], d1_sym, d2_sym]:
-                                if sym in sym_prob:
-                                    p *= sym_prob[sym]
-
-                            # Use tuple for O(1) duplicate checking
-                            rule_tuple = (rule['m'], d1_sym, d2_sym, p)
-
-                            if rule_tuple not in rules_set:
-                                rules_set.add(rule_tuple)
-                                rule_new = {
-                                    'm': rule['m'],
-                                    'd1': d1_sym,
-                                    'd2': d2_sym,
-                                    'p': p
-                                }
-                                rules_new.append(rule_new)
-
-                # Progress reporting for large grammars
-                processed_count += 1
-                if processed_count % report_interval == 0:
-                    progress_pct = (processed_count / num_input_rules) * 100
-                    elapsed = time.time() - t0
-                    rules_created = len(rules_new)
-                    print(f"    Progress: {progress_pct:.0f}% ({processed_count}/{num_input_rules} rules) - "
-                          f"{rules_created} expanded rules created - {elapsed:.1f}s elapsed")
+                        rule_key = (rule['m'], d1_sym, d2_sym, p)
+                        if rule_key not in rules_seen:
+                            rules_seen.add(rule_key)
+                            rules_new.append({'m': rule['m'], 'd1': d1_sym,
+                                              'd2': d2_sym, 'p': p})
 
             self.rules = rules_new
             self._add_names()
-
-            t_total = time.time() - t_start
-            print(
-                f"  Tokenization complete: {num_input_rules} -> {len(rules_new)} rules in {t_total:.1f}s")
-            print(
-                f"    Average expansion: {len(rules_new)/num_input_rules:.1f}x")
+            print(f"    Lookup tables built in {time.time()-t0:.2f}s")
 
     def _tokenize_cnf(self):
         # Tokenize CNF by replacing each type symbol (e.g., X)
@@ -441,6 +376,7 @@ class PCFG():
             fnames.append(self.opts['null'])
 
         self.filler_names = fnames
+        # print(f"DEBUG: PCFG _add_names filler names is {self.filler_names}")
 
     def _sort_rules(self):
 
@@ -1187,24 +1123,12 @@ class BrickRole(object):
             len(self.role_names), -1, dtype=np.int32)
         self.role_daughter_r_idx = np.full(
             len(self.role_names), -1, dtype=np.int32)
-        self.role_daughter_m_idx = np.full(
-            len(self.role_names), -1, dtype=np.int32)
-        self.role_daughter_l0_idx = np.full(
-            len(self.role_names), -1, dtype=np.int32)
-        self.role_daughter_r0_idx = np.full(
-            len(self.role_names), -1, dtype=np.int32)
 
         for ri in range(len(self.role_names)):
             if len(self.role_daughters_idx['l'][ri]) > 0:
                 self.role_daughter_l_idx[ri] = self.role_daughters_idx['l'][ri][0]
             if len(self.role_daughters_idx['r'][ri]) > 0:
                 self.role_daughter_r_idx[ri] = self.role_daughters_idx['r'][ri][0]
-            if len(self.role_daughters_idx['m'][ri]) > 0:
-                self.role_daughter_m_idx[ri] = self.role_daughters_idx['m'][ri][0]
-            if len(self.role_daughters_idx['l0'][ri]) > 0:
-                self.role_daughter_l0_idx[ri] = self.role_daughters_idx['l0'][ri][0]
-            if len(self.role_daughters_idx['r0'][ri]) > 0:
-                self.role_daughter_r0_idx[ri] = self.role_daughters_idx['r0'][ri][0]
 
         # Pre-compute mother relationships
         self.role_mothers_idx = {}
@@ -1373,36 +1297,19 @@ class BrickRole(object):
 class HarmonicGrammar():
 
     def __init__(self, pcfg, root, max_sent_len, opts=None):
-        print("DEBUG1")
         self._set_opts(root=root, max_sent_len=max_sent_len)
-        print("DEBUG2")
         self._update_opts(opts)
-        print("DEBUG3")
         self.pcfg_str = pcfg
-        print("DEBUG4")
         self.g0 = PCFG(pcfg=pcfg, root=root, opts=self.opts)  # original rule
-        print("DEBUG5")
         self.g = copy.deepcopy(self.g0)
-        print("DEBUG6")
         self._create_roles()
-        print("DEBUG7")
         self._add_names()
-        print("DEBUG8")
         self.rules = []
-        print("DEBUG9")
         self._add_additional_rules()
-        print("DEBUG10")
         self._add_binary_rules()
-        print("DEBUG11")
         self._add_copy_rules()
-        print("DEBUG12")
-        # self._add_competition_rules()
-        # self._add_null_rules()
-        print("DEBUG13")
         self._add_unary_rules()
-        print("DEBUG14")
         self._add_expansion_rules()
-        print("DEBUG15")
         print("Optimizing HarmonicGrammar with fast lookups...")
         # Note: g0's fast lookups already created in PCFG.__init__
         # self.g is a deepcopy, so copy the lookups

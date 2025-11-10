@@ -17,6 +17,12 @@ except ImportError:
 from only_datastructure_speedup import PCFG, Node, HarmonicGrammar, BrickRole
 
 
+def save_model(net, filename):
+    f = open(filename, 'wb')
+    pickle.dump(net, f)
+    f.close()
+
+
 def encode_symbols(num_symbols, coord='dist', dp=0., dim=None, seed=None):
     """Generates vector encodings of num_symbols symbols.
 
@@ -139,6 +145,359 @@ def dot_products(dp_mat, dim, max_iter=100000, seed=None, tol=1e-6):
 
     return sym_mat
 
+# =============================================================================
+# JAX-ACCELERATED TRIAL EXECUTION
+# =============================================================================
+# These functions enable GPU-accelerated parallel trial execution
+
+
+if JAX_AVAILABLE:
+
+    def _build_filler_type_map(net):
+        """
+        Precompute mapping from filler base types to all matching fillers.
+
+        This is needed because JAX can't call Python methods during JIT compilation.
+        The CPU version's set_input() expands types dynamically, but JAX needs
+        a precomputed mapping.
+
+        Args:
+            net: GscNet instance
+
+        Returns:
+            dict: Mapping from base filler type (e.g., 'N:0') to list of matching
+                  filler names (e.g., ['N:0', '*N:0', '#N:0'])
+        """
+        filler_type_map = {}
+        g = net.hg.g
+
+        # Build mapping for each unique filler type
+        seen_types = set()
+        for filler in net.filler_names:
+            # Get the base type (remove brackets, copy symbols, pos markers)
+            base_type = g.get_types([filler],
+                                    ignore_copy=True,
+                                    ignore_bracket=True,
+                                    ignore_pos_f=g.opts['use_pos_f'])[0]
+
+            if base_type in seen_types:
+                continue
+            seen_types.add(base_type)
+
+            # Find all fillers matching this type
+            fi_list = g.find_fillers_type(base_type,
+                                          ignore_bracket=True,
+                                          ignore_copy=True,
+                                          ignore_pos_f=g.opts['use_pos_f'])
+
+            matching_fillers = g.get_fillers(fi_list)
+
+            # Filter out copy symbols if requested (matching CPU behavior)
+            copy_symbol = g.opts.get('copy', '@')
+            matching_fillers = [
+                f for f in matching_fillers if copy_symbol not in f]
+
+            filler_type_map[base_type] = matching_fillers
+
+        return filler_type_map
+
+    def _compute_scale_constants_jax(pos, net_params):
+        """
+        Compute scale_constants for role masking based on word position.
+
+        Args:
+            pos: Word position (0 for wrapup, 1+ for prefix words)
+            net_params: Dictionary containing role information
+
+        Returns:
+            scale_constants: Array of shape (num_bindings,) with exponential weights
+        """
+        num_bindings = net_params['num_bindings']
+        num_roles = net_params['num_roles']
+        num_fillers = net_params['num_fillers']
+
+        if pos == 0:
+            # Wrapup: all roles active
+            return jnp.ones(num_bindings)
+
+        # Get parameters
+        scale_type = net_params.get('scale_type', 'diagonal')
+        scaling_factor = net_params.get('scaling_factor', 1.0)
+        # List of (lv, pos) tuples
+        role_names_tuples = net_params['role_names_tuples']
+
+        # Convert to JAX arrays for vectorized operations
+        # Level for each role
+        lv_array = jnp.array([t[0] for t in role_names_tuples])
+        # Position for each role
+        pos_array = jnp.array([t[1] for t in role_names_tuples])
+
+        # Compute weight for each role
+        if scale_type == 'diagonal':
+            # Symmetric diagonal weighting
+            role_weights = jnp.exp(-jnp.abs(lv_array +
+                                   pos_array - (pos + 1)) * scaling_factor)
+        elif scale_type == 'pos':
+            # Position-based weighting
+            role_weights = jnp.exp(-jnp.abs(pos_array - pos) * scaling_factor)
+        else:
+            role_weights = jnp.ones(num_roles)
+
+        # Expand role weights to binding weights
+        # Each role's weight applies to all its fillers
+        # weights[ri * num_fillers : (ri+1) * num_fillers] = role_weights[ri]
+        weights = jnp.repeat(role_weights, num_fillers)
+
+        return weights
+
+    def _compute_external_input_jax(binding_name, net_params):
+        """
+        Compute external input extC for a given binding name with type expansion.
+
+        Matches CPU behavior: expands filler types to all matching fillers.
+        For example, 'N:0/(1,1)' expands to ['N:0/(1,1)', '*N:0/(1,1)', '#N:0/(1,1)', ...]
+
+        Args:
+            binding_name: String like "N:0/(1,1)"
+            net_params: Dictionary containing binding_names list, estr, filler_type_map
+
+        Returns:
+            extC: Array of shape (num_bindings,) with input at specified binding
+        """
+        num_bindings = net_params['num_bindings']
+        binding_names = net_params['binding_names']
+        estr = net_params['estr']
+
+        filler_type_map = net_params['filler_type_map']
+        bsep = net_params['bsep']
+
+        extC = jnp.zeros(num_bindings)
+
+        # Split binding name into filler and role
+        try:
+            filler, role = binding_name.split(bsep)
+        except ValueError:
+            # Binding not found, return zero input
+            return extC
+
+        # Get all fillers matching this type
+        matching_fillers = filler_type_map.get(filler, [filler])
+
+        # Set external input for all matching bindings
+        for matching_filler in matching_fillers:
+            expanded_binding = matching_filler + bsep + role
+            try:
+                idx = binding_names.index(expanded_binding)
+                extC = extC.at[idx].set(estr)
+            except ValueError:
+                # Binding not found, skip
+                pass
+
+        return extC
+
+    def _run_single_trial_jax(rng_key, net_params, prefix, update_q_discrete):
+        """
+        Pure functional version of a single trial for JAX.
+
+        Args:
+            rng_key: JAX random key for this trial
+            net_params: Dictionary containing network parameters and state
+            prefix: List of filler names for the prefix  (e.g., ['N:0', 'Vi:0'])
+            update_q_discrete: Boolean for q update mode
+
+        Returns:
+            actC: Final activation state (num_bindings,)
+            grid_point_indices: Grid point as filler indices per role (num_roles,)
+        """
+        # Initialize state with noise
+        rng_key, noise_key = jax.random.split(rng_key)
+        noise = jax.random.normal(
+            noise_key, (net_params['num_bindings'],)) * net_params['init_noise_mag']
+        actC = net_params['ep'] + noise
+
+        # Initialize other state variables
+        q = jnp.ones(net_params['num_roles']) * net_params['q_init']
+        T = net_params['T_init']
+        dt = net_params['dt_init']
+
+        def dynamics_step(carry, _):
+            actC, q, T, rng, extC_val, scale_const, q_max_val = carry
+            # Split RNG for this step
+            rng, step_rng = jax.random.split(rng)
+
+            # Extract parameters
+            WC = net_params['WC']
+            bC = net_params['bC']
+            S = net_params['S']
+            C = net_params['C']
+            bowl_strength = float(net_params['bowl_strength'])
+            bowl_center = float(net_params['bowl_center'])
+            m = float(net_params['m'])
+
+            # Reshape actC to matrix form (fillers × roles)
+            actCmat = actC.reshape(
+                (net_params['num_fillers'], net_params['num_roles']), order='F')
+
+            # ===================================================================
+            # Compute HGradC (Harmony gradient in conceptual coordinates)
+            # ===================================================================
+
+            # 1. Grammar component (weights + biases + external input)
+            hgrad_g = WC @ actC + bC + extC_val
+
+            # 2. Bowl constraints (attraction to bowl center)
+            hgrad_b = bowl_strength * (bowl_center - actC)
+
+            # 3. Commitment energy (q term) - pushes toward 0 or 1
+            q_extended = jnp.repeat(q, net_params['num_fillers'])
+            hgrad_q0 = -2 * q_extended * actC * (1 - actC) * (1 - 2 * actC)
+
+            # 4. Role-filling constraint - one filler per role
+            ssq = jnp.sum(actCmat ** 2, axis=0)
+            ssq_extended = jnp.repeat(ssq - 1, net_params['num_fillers'])
+            hgrad_q1 = -4 * m * actC * ssq_extended
+
+            # Combine and transform gradient components
+            HGradC_val = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
+
+            # ===================================================================
+            # CRITICAL: Apply S matrix and scale_constants
+            # ===================================================================
+            # This matches the original: gradC = scale_constants * S.dot(HGradC())
+            gradC = scale_const * (S @ HGradC_val)
+
+            # Euler integration
+            actC = actC + dt * gradC
+
+            # Add noise
+            # Add noise in neural space, transform to conceptual
+            noise_neural = jax.random.normal(
+                step_rng, (net_params['num_units'],)) * jnp.sqrt(2 * T * dt)
+            noiseC = jnp.sqrt(scale_const) * (C @ noise_neural)
+            actC = actC + noiseC
+
+            # Update q
+            q = q + net_params['q_rate'] * dt
+            q = jnp.clip(q, 0, q_max_val)
+
+            return (actC, q, T, rng, extC_val, scale_const, q_max_val), None
+
+        # Process prefix words if any
+        if prefix is not None and len(prefix) > 0:
+            qpolicy = net_params['qpolicy']
+            bsep = net_params['bsep']
+            for wpos, fname in enumerate(prefix, start=1):
+                # Construct binding name
+                binding_name = f"{fname}{bsep}(1,{wpos})"
+                # Compute external input
+                extC = _compute_external_input_jax(binding_name, net_params)
+
+                # Compute scale_constants if enabled
+                if net_params['update_scale_constants']:
+                    scale_constants = _compute_scale_constants_jax(
+                        wpos, net_params)
+                else:
+                    scale_constants = jnp.ones(net_params['num_bindings'])
+
+                # Run dynamics loop
+                # Set q_max for this word
+                q_max_word = qpolicy[wpos]
+
+                # Calculate duration for this word
+                q_inc = qpolicy[wpos] - qpolicy[wpos - 1]
+                duration = jnp.max(q_inc) / net_params['q_rate']
+                num_steps = jnp.int32(jnp.ceil(duration / dt))
+
+                # Run dynamics for this prefix word
+                (actC, q, T, rng_key, _, _, _), _ = jax.lax.scan(
+                    dynamics_step,
+                    (actC, q, T, rng_key, extC, scale_constants, q_max_word),
+                    None,
+                    length=num_steps
+                )
+
+        # Wrapup phase: clear input, reset scale_constants, run to completion
+        extC_wrapup = jnp.zeros(net_params['num_bindings'])
+
+        if net_params['update_scale_constants']:
+            scale_constants_wrapup = _compute_scale_constants_jax(
+                0, net_params)
+        else:
+            scale_constants_wrapup = jnp.ones(net_params['num_bindings'])
+
+        q_max_final = net_params['q_max']
+
+        # Calculate wrapup duration
+        duration_wrapup = jnp.max(q_max_final - q) / net_params['q_rate']
+        num_steps_wrapup = jnp.int32(jnp.ceil(duration_wrapup / dt))
+
+        # Run wrapup dynamics
+        (actC, q, T, rng_key, _, _, _), _ = jax.lax.scan(
+            dynamics_step,
+            (actC, q, T, rng_key, extC_wrapup, scale_constants_wrapup, q_max_final),
+            None,
+            length=num_steps_wrapup
+        )
+
+        # Extract grid point (argmax per role)
+        actCmat = actC.reshape(
+            (net_params['num_fillers'], net_params['num_roles']), order='F')
+        grid_point = jnp.argmax(actCmat, axis=0)
+
+        return actC, grid_point
+
+    def _extract_net_params_for_jax(net):
+
+        # Extract role position tuples for scale_constants computation
+        role_names_tuples = []
+        if hasattr(net.hg, 'roles'):
+            for rname in net.role_names:
+                lv, pos = net.hg.roles.str2tuple(rname)
+                role_names_tuples.append((lv, pos))
+        # Build filler type map for external input type expansion
+        filler_type_map = _build_filler_type_map(net)
+        """Extract network parameters into a JAX-compatible dictionary."""
+        params = {
+            'num_bindings': net.num_bindings,
+            'num_roles': net.num_roles,
+            'num_fillers': net.num_fillers,
+            'num_units': net.num_units,
+            'WC': jnp.array(net.WC),
+            'bC': jnp.array(net.bC),
+            # External input strength
+            'estr': float(net.estr[0]) if hasattr(net.estr, '__len__') else float(net.estr),
+            'ep': jnp.array(net.ep),
+            'init_noise_mag': net.train_opts['init_noise_mag'],
+            'q_init': net.opts['q_init'],
+            'q_max': net.opts['q_max'],
+            # Default to 1.0 if not found
+            'q_rate': net.opts.get('q_rate', 1.0),
+            'dt_init': net.opts['dt_init'],
+            'T_init': net.opts['T_init'],
+            'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
+            # Critical parameters for correct gradient computation
+            'S': jnp.array(net.S),  # Inverse similarity matrix
+            'C': jnp.array(net.C),
+            'bowl_strength': net.opts.get('bowl_strength', 0.0),
+            'bowl_center': net.opts.get('bowl_center', 0.5),
+            'm': net.opts.get('m', 1.0),  # Role-filling constraint strength
+            'scale_constants': jnp.array(net.scale_constants) if hasattr(net, 'scale_constants') else jnp.ones(net.num_bindings),
+            # For prefix handling
+            'binding_names': net.binding_names,  # List of binding name strings
+            # Binding separator
+            'bsep': net.hg.opts['bsep'] if hasattr(net.hg, 'opts') else '/',
+            'role_names_tuples': role_names_tuples,  # List of (lv, pos) tuples
+            'scale_type': net.opts.get('scale_type', 'diagonal'),
+            'scaling_factor': net.opts.get('scaling_factor', 1.0),
+            'update_scale_constants': net.train_opts.get('update_scale_constants', False),
+            'filler_type_map': filler_type_map,  # Filler type expansion mapping
+        }
+        return params
+
+    # Create batched version using vmap
+    _run_trials_batched_jax = vmap(
+        _run_single_trial_jax, in_axes=(0, None, None, None))
+
 
 class GscNet():
     # NOTE: CHECK method backup_parametres()
@@ -161,6 +520,8 @@ class GscNet():
         print('{} s for generating encodings'.format(dur))
 
         t0 = time.time()
+        if self.hg is not None:
+            self._precompute_fast_lookups()
         # Add parameters ==========================================
         self.WC = np.zeros((self.num_bindings, self.num_bindings))
         self.bC = np.zeros(self.num_bindings)
@@ -200,8 +561,6 @@ class GscNet():
         else:
             self.qpolicy = qpolicy
         self.backup_parameters()
-        if self.hg is not None:
-            self._precompute_fast_lookups()
 
     def _precompute_fast_lookups(self):
         '''Pre-compute index lookup structures for O(1) access.'''
@@ -246,20 +605,6 @@ class GscNet():
 
                 if dl_idx >= 0 and dr_idx >= 0:
                     self.role_daughter_binding_indices[ri] = {
-                        'l': self.role_to_binding_indices[dl_idx],
-                        'r': self.role_to_binding_indices[dr_idx],
-                        'self': self.role_to_binding_indices[ri]
-                    }
-
-        # Pre-compute mother indices (for building model function)
-        self.role_mother_binding_indices = {}
-        for ri in range(self.hg.num_roles):
-            if not self.hg.roles.role_is_terminal[ri]:
-                dl_idx = self.hg.roles.role_mother_l_idx[ri]
-                dr_idx = self.hg.roles.role_mother_r_idx[ri]
-
-                if dl_idx >= 0 and dr_idx >= 0:
-                    self.role_mother_binding_indices[ri] = {
                         'l': self.role_to_binding_indices[dl_idx],
                         'r': self.role_to_binding_indices[dr_idx],
                         'self': self.role_to_binding_indices[ri]
@@ -332,56 +677,134 @@ class GscNet():
                     sys.exit('Cannot find `{}` in encodings.'.format(key))
 
     def _set_opts(self):
-        # the default setting
+        # Set default options
 
         self.opts = {}
 
-        self.opts['add_null'] = True
-        self.opts['f_empty'] = '@'
-        self.opts['f_root'] = '#'
+        # Time step size
+        # min_dt: (float) minimal value of dt
+        # max_dt: (float) maximal value of dt
+        # dt_init: (float) initial value of dt
+        # adaptive_dt: (bool) update dt adaptively or not?
+        self.opts['min_dt'] = 0.0005
+        self.opts['max_dt'] = 0.01
+        self.opts['dt_init'] = 0.005
+        self.opts['adaptive_dt'] = False
 
-        self.opts['use_hnf'] = False
-        self.opts['use_pos_f'] = True
-        self.opts['add_copy_rules'] = False
-        # self.opts['use_minimal_copy_rules'] = True  # not matter much
+        # Temperature parameters: for simulated annealing
+        # T_init: (float) initial temperature
+        # T_min: (float) minimal temperature
+        # T_decay_rate: (float) exponenetial decay rate
+        self.opts['T_init'] = 1e-3
+        self.opts['T_min'] = 0.
+        self.opts['T_decay_rate'] = 0.  # qe-3
 
-        self.opts['pos_m'] = ['l', 'r', 'm', 'l0', 'r0']
-        self.opts['pos_d'] = ['l', 'r', 'm', 'l0', 'r0']
-        self.opts['pos_s'] = ['l', 'r']
-        self.opts['pos_f'] = ['0', '1', '9']
+        # Bowl parameters
+        # bowl_center: (float)
+        # bowl_strength: (float) will be updated
+        # beta_min_offset: (float) value to be added to minimal bowl strength
+        if self.hg is not None:
+            self.opts['bowl_center'] = 1 / np.sqrt(self.hg.num_fillers)
+        else:
+            self.opts['bowl_center'] = 0.1
+        self.opts['bowl_strength'] = None
+        self.opts['beta_min_offset'] = 0.1
 
-        self.opts['pos_copy'] = 'l'  # (l)eft or (r)ight
-        self.opts['copy'] = '*'
-        self.opts['null'] = '_'
-        self.opts['sep'] = ':'
+        # Quantization parameters: the first three parameters
+        #   will be ignored when q_policy is given.
+        # q_init: (float, >= 0) initial value of q
+        # q_max: (float) maximum value of q
+        # q_rate: (float) rate of change in q (i.e., dq/dt)
+        # q_policy: (2d NumPy array) quantizatoin policy
+        #   first column: time points
+        #   second column: q values at the time points
+        #   q values between the time points are linearly interpolated
+        # c: (float, 0 <= c <= 1) relative strength of
+        #   the first quantization constraint (see Hq0)
+        self.opts['q_init'] = 0.
+        self.opts['q_max'] = 20.      # perviously 200
+        # self.opts['q_min'] = 0.
+        self.opts['q_rate'] = 1.
+        self.opts['q_policy'] = None
+        # self.opts['c'] = 0.5
+
+        # trace_varnames: (list) of names (str) of variables
+        #   to log their changes in time
+        # self.opts['trace_varnames'] = [
+        #     't', 'actC', 'q', 'T', 'H', 'Hg', 'Hg', 'Hq0', 'Hq1']
+        self.opts['trace_varnames'] = [
+            't', 'actC', 'q']
+
+        # Parameters used when computing distance and (ema_)speed
+        self.opts['coord'] = 'N'
+        self.opts['norm_ord'] = np.inf
+        self.opts['ema_factor'] = 0.001
+        self.opts['ema_tau'] = -1 / np.log(self.opts['ema_factor'])
+
+        # quantization constraint type (with_null vs. without_null)
+        # with_null: sum of act^2 = 1
+        # without_null: sum of act^2 = 0 or 1
+        self.opts['quant_type'] = 'with_null'
+
+        # # Not much important
+        # self.opts['H0_on'] = 1.
+        # self.opts['H1_on'] = 1.
+        # self.opts['Hq_on'] = 1.
+        self.opts['m'] = 30.   # Hq1 strength
+        self.opts['bias_factor'] = 30.
+
+        self.opts['min_H_increase'] = 1e-3
+        # self.opts['use_Hq1_maxvar'] = False  # CHECK the functions
+        # self.opts['add_neg_weight_btw_roles'] = False
+        # self.opts['neg_weight_btw_roles'] = None
+
+        self.opts['use_second_order_bias'] = True
+        self.opts['init_estr'] = 2.
+
+        self.opts['scaling_factor'] = 0.
+        self.opts['scale_type'] = 'diagonal'
+        self.opts['ep_method'] = 'integration'
+        self.opts['use_runC'] = False
+
+        self.opts['penalize_root_posN'] = True
 
     def _update_opts(self, opts):
         # Update opts
 
         if opts is not None:
-            for key, val in opts.items():
-                if key in self.opts.keys():
-                    self.opts[key] = val
-        if not self.opts['use_hnf']:
-            self.opts['pos_m'] = self.opts['pos_m'][0:2]
-            self.opts['pos_d'] = self.opts['pos_d'][0:2]
-        if self.opts['use_pos_f']:
-            if not self.opts['use_hnf']:
-                self.opts['pos_f'] = self.opts['pos_f'][0:2]
-        else:
-            self.opts['pos_f'] = None
+            for key in opts:
+                if key in self.opts:
+                    self.opts[key] = opts[key]
+                    if key == 'ema_factor':
+                        self.opts['ema_tau'] = -1 / np.log(self.opts[key])
+                    if key == 'ema_tau':
+                        self.opts['ema_factor'] = np.exp(-1 / self.opts[key])
+                else:
+                    sys.exit('Cannot find `{}` in opts.'.format(key))
 
     def _add_names(self):
 
-        fnames = [val for rule in self.rules for key, val in rule.items()
-                  if (key != 'p') and (val is not None)]
-        fnames = list(set(fnames))
-        fnames.sort()
+        if self.hg is not None:
+            self.encodings['filler_names'] = self.hg.filler_names
+            self.encodings['role_names'] = self.hg.role_names
+            bsep = self.hg.opts['bsep']
+        else:
+            bsep = '/'
 
-        if self.opts['add_null']:
-            fnames.append(self.opts['null'])
+        if self.encodings['filler_names'] is None:
+            sys.exit("Please provide a list of filler names.")
+        if self.encodings['role_names'] is None:
+            sys.exit("Please provide a list of role names.")
 
-        self.filler_names = fnames
+        self.filler_names = self.encodings['filler_names']
+        self.role_names = self.encodings['role_names']
+        self.binding_names = [
+            f + bsep + r for r in self.role_names
+            for f in self.filler_names]
+
+        self.num_fillers = len(self.filler_names)
+        self.num_roles = len(self.role_names)
+        self.num_bindings = len(self.binding_names)
 
     def _generate_encodings(self, overwrite=False):
 
@@ -491,7 +914,7 @@ class GscNet():
                 if self.hg.roles.role_is_bracketed[ri] == rule['br']:
                     # mother_roles = roles.get_mothers(role)
                     # focus_mother_roles = mother_roles[rule['rel']]
-                    focus_mother_roles_indices = self.role_mother_binding_indices[ri][rule['rel']]
+                    focus_mother_roles_indices = self.hg.roles.role_mothers_idx[rule['rel']][ri]
                     for focus_mother_roles_ind in focus_mother_roles_indices:
                         focus_mother_role = self.role_names[focus_mother_roles_ind]
                         if focus_mother_role in roles.role_names:
@@ -660,7 +1083,7 @@ class GscNet():
                             bname = fname + self.hg.opts['bsep'] + rname
                             idx = self.find_bindings(bname)
                             # lv, pos = self.hg.roles.str2tuple(rname)
-                            lv, pos = self.hg.roles.roles_tuple[ri]
+                            lv, pos = self.hg.roles.role_tuples[ri]
                             if lv == 1:
                                 self.set_bias(
                                     bname, self.hg.opts['H_root_illegitimate'])
@@ -690,7 +1113,7 @@ class GscNet():
                             bname = fname + self.hg.opts['bsep'] + rname
                             idx = self.find_bindings(bname)
                             # lv, pos = self.hg.roles.str2tuple(rname)
-                            lv, pos = self.hg.roles.roles_tuple[ri]
+                            lv, pos = self.hg.roles.role_tuples[ri]
                             if lv == 1:
                                 self.set_bias(
                                     bname, self.hg.opts['H_root_illegitimate'])
@@ -727,6 +1150,64 @@ class GscNet():
 
             self._set_biases()
 
+    def set_weight(self, bname1, bname2, weight,
+                   symmetric=True, cumulative=False, c2n=True):
+        '''Set the weight of a connection from binding1 (str or list of str) to
+        binding2 (str or list of str). When symmetric is True (default), the
+        connection weight from binding2 to binding1 is set to the same value.
+
+        Args:
+            bname1: (str or list of str) source binding names
+            bname2: (str or list of str) target binding names
+            weight: (float) weight value
+            symmetric: (bool)
+
+        Example:
+            >>> net.set_weight('A/0', 'B/1', 2.)
+            >>> net.set_weight('A/0', ['B/1', 'C/2'], 2.)
+        '''
+
+        idx1 = self.find_bindings(bname1)
+        idx2 = self.find_bindings(bname2)
+        if not cumulative:
+            if symmetric:
+                self.WC[idx1, idx2] = self.WC[idx2, idx1] = weight
+            else:
+                self.WC[idx2, idx1] = weight
+        else:
+            # WC = np.zeros(self.WC.shape)
+            if symmetric:
+                # WC[idx1, idx2] = WC[idx2, idx1] = weight
+                # self.WC += WC
+                self.WC[idx1, idx2] += weight
+                self.WC[idx2, idx1] += weight
+            else:
+                # WC[idx2, idx1] = weight
+                # self.WC += WC
+                self.WC[idx2, idx1] += weight
+
+        if c2n:
+            self._set_weights()
+
+    def set_bias(self, binding_name, bias, c2n=True):
+        '''Set bias values of binding_name (str or list of str) to bias (float).
+
+        Args:
+            binding_name: (str or list of str) binding names
+            bias: (float) bias value
+
+        Precondition:
+            binding_name must contain legitimate binding names.
+
+        Example:
+            >>> net.set_bias('A/0', -1.)
+        '''
+
+        idx = self.find_bindings(binding_name)
+        self.bC[idx] = bias
+        if c2n:
+            self._set_biases()
+
     def bias2weight(self):
         '''Set recurrent weights given bias values in conceptual coordinates'''
 
@@ -734,6 +1215,56 @@ class GscNet():
         self.bC = np.zeros(self.num_bindings)
         self._set_weights()
         self._set_biases()
+
+    def set_filler_bias(self, filler_name, bias, c2n=True):
+        '''Find f/r bindings with filler_name (str or list of str) and
+        set their bias values to bias (float).
+
+        Args:
+            filler_name: (str or list of str) filler names
+            bias: (float) bias value
+
+        Precondition:
+            filler_name must contain legitimate filler names.
+
+        Example:
+            >>> net.set_filler_name('A', -1.)
+        '''
+
+        filler_list = [bb.split('/')[0] for bb in self.binding_names]
+        if not isinstance(filler_name, list):
+            filler_name = [filler_name]
+        for jj, filler in enumerate(filler_name):
+            idx = [ii for ii, ff in enumerate(filler_list) if filler == ff]
+            self.bC[idx] = bias
+
+        if c2n:
+            self._set_biases()
+
+    def set_role_bias(self, role_name, bias, c2n=True):
+        '''Find f/r bindings with role_name (str or list of str) and
+        set their bias values to bias (float).
+
+        Args:
+            role_name: (str or list of str) filler names
+            bias: (float) bias value
+
+        Precondition:
+            role_name must contain legitimate filler names.
+
+        Example:
+            >>> net.set_role_name('0', -1.)
+        '''
+
+        role_list = [bb.split('/')[1] for bb in self.binding_names]
+        if not isinstance(role_name, list):
+            role_name = [role_name]
+        for jj, role in enumerate(role_name):
+            idx = [ii for ii, rr in enumerate(role_list) if role == rr]
+            self.bC[idx] = bias
+
+        if c2n:
+            self._set_biases()
 
     def _set_weights(self):
         '''Converts WC to W.
@@ -777,6 +1308,73 @@ class GscNet():
             act = self.act
         return self.C.dot(act)
 
+    def check_divergence(self, tol=2.):
+        return max(self.actC) > tol
+
+    def runC(self,
+             duration,
+             update_T=True,
+             update_q=True,
+             log_trace=True,
+             plot=True,
+             tol=None,
+             trace_list='all'):
+
+        t_max = self.t + duration
+        self.converged = False
+        self.lapse = 0
+        self.maxH = -np.inf
+
+        if log_trace:
+            self.initialize_traces(trace_list)
+
+        while self.t < t_max:
+            self.update_stateC()
+
+            if update_T and (self.opts['T_decay_rate'] > 0):
+                self.update_T()
+            if update_q:
+                self.update_q()
+            if log_trace:
+                self.update_traces()
+
+            if self.check_divergence():
+                # if dt is too big, the model may diverge.
+                break
+
+            if tol is not None:
+                self.check_convergence(tol=tol)
+                if self.converged:
+                    break
+
+        self.act = self.C2N()
+
+        if log_trace:
+            self.finalize_traces()
+
+        # if log_trace and plot:
+        #     heatmap(self.traces['actC'].T,
+        #             xticklabels='', yticklabels=self.binding_names)
+
+    def reset(self, mu=None, sd=0.):
+        '''Reset the model. q and T will be set to their initial values'''
+
+        self.dt = self.opts['dt_init']
+        self.q = self.opts['q_init'] * np.ones(self.num_roles)
+        self.T = self.opts['T_init']
+        self.t = 0.
+        self.update_scale_constants(pos=0)
+
+        if mu is None:
+            self.set_random_state()
+        else:
+            self.set_state(mu=mu, sd=sd)
+
+        self.clear_input()
+
+        if hasattr(self, 'traces'):
+            del self.traces
+
     def get_ep(self, dur=10, plot=True, q=None, actC=None, method='newton'):
 
         q_backup = self.q.copy()
@@ -814,6 +1412,57 @@ class GscNet():
             self.opts['q_rate'] = q_rate_backup
 
         self.q = q_backup.copy()
+
+    def extend_rvec(self, rvec):
+        return np.tile(
+            rvec, (self.num_fillers, 1)).flatten('F')
+
+    def add_noiseC(self):
+
+        noise = np.sqrt(2 * self.T * self.dt) * \
+            np.random.randn(self.num_units)
+        noiseC = np.sqrt(self.scale_constants) * \
+            self.N2C(noise)  # rescaling noise
+        self.actC += noiseC
+
+    def update_q(self):
+
+        if hasattr(self, 'q_mask'):
+            self.q += self.opts['q_rate'] * self.q_mask * self.dt
+        else:
+            self.q += self.opts['q_rate'] * self.dt
+        self.q = np.maximum(
+            np.minimum(self.q, self.opts['q_max']), 0)
+
+    def set_random_state(self, minact=0, maxact=1):
+
+        self.actC = np.random.uniform(
+            minact, maxact, size=self.num_bindings)
+        self.actCmat = self.vec2mat()
+        self.act = self.C2N(self.actC)
+
+    def update_stateC(self):
+        # ToDo:
+        # (1) adaptive stepsize
+        # (2) different time scales -> consider dt as a vector (scale_constants)
+        #     (scale_constants for noise?)
+        # (3) clamp
+
+        gradC = self.scale_constants * self.S.dot(self.HGradC())
+
+        # adaptive stepsize
+        # update_dt()  # --> dt as a vector
+
+        self.t += self.dt             # update time
+        self.actC = self.actC + self.dt * gradC    # Euler integration
+        self.add_noiseC()
+
+        # if self.clamped:
+        #     self.act = self.act_clamped()
+
+        # Update actC and actCmat which are needed to compute Hq0Grad and Hq1Grad
+        # self.actC = self.N2C()
+        self.actCmat = self.vec2mat()
 
     def _set_bowl_parameters(self):
         '''Sets bowl parameters to default values. Default values
@@ -923,11 +1572,14 @@ class GscNet():
         targets = []
         pvals = []
         counts = []
-        for _ in range(nsamples):
+        for i in range(nsamples):
             sentence, target, p = self.generate_sentence(
                 min_sent_len=min_sent_len,
                 max_sent_len=max_sent_len,
                 use_type=use_type)
+            # print(f"sentence: {sentence}")
+            # print(f"target: {target}")
+            # print(f"p: {p}")
             if sentence in sentences:
                 idx = sentences.index(sentence)
                 counts[idx] += 1
@@ -959,6 +1611,7 @@ class GscNet():
 
         sent, parse_tree, p = self.hg.generate_sentence(
             min_sent_len=min_sent_len, max_sent_len=max_sent_len, use_type=use_type)
+        # DEBUG: print(f"GSC-generate_sentence: sent is {sent}")
         sent_input = [bname + self.hg.opts['bsep'] + '(1,{})'.format(pos + 1)
                       for pos, bname in enumerate(sent)]
 
@@ -972,8 +1625,189 @@ class GscNet():
                     f_empty_type + self.hg.opts['bsep'] +
                     '(1,{})'.format(len(sent) + pos + 1)
                     for pos in range(num_empty_terminal_roles)]
-
         return sent_input, self.get_target_state(parse_tree), p
+
+    def get_target_state(self, parse_tree):
+
+        if self.hg.opts['role_system'] == 'brick_role':
+
+            max_sent_len = self.hg.opts['max_sent_len']
+
+            parse_tree_padded = []
+            for lv in range(1, max_sent_len + 1):
+                num_roles = max_sent_len - lv + 1
+                parse_tree_padded.append(
+                    [self.hg.g.opts['null']] * num_roles)
+
+            sent_len = len(parse_tree[0])
+            for lv in range(1, sent_len + 1):
+                lv_id = lv - 1
+                num_words = sent_len - lv + 1
+                parse_tree_padded[lv_id][0:num_words] = parse_tree[lv_id]
+
+            bnames = []
+            for lv in range(1, max_sent_len + 1):
+                for pos in range(1, max_sent_len - lv + 2):
+                    rname = '({},{})'.format(lv, pos)
+                    fname = parse_tree_padded[lv - 1][pos - 1]
+                    bname = fname + self.hg.opts['bsep'] + rname
+                    bnames.append(bname)
+
+        else:
+            sys.exit('Currently, only brick roles are supported.')
+
+        return self.get_discrete_state(bnames)
+
+    def get_discrete_state(self, binding_names):
+
+        idx = self.find_bindings(binding_names)
+        actC = np.zeros(self.num_bindings)
+        actC[idx] = 1.0
+        return actC
+
+    def set_discrete_state(self, binding_names):
+
+        idx = self.find_bindings(binding_names)
+        self.actC = np.zeros(self.num_bindings)
+        self.actC[idx] = 1.0
+        self.actCmat = self.vec2mat()
+        self.act = self.C2N()
+
+    def get_corpus_stat(self, corpus):
+        # No need for corpus['sentence']
+
+        stat = {}
+        stat['trees'] = {}
+        stat['treelets'] = {}
+        stat['binding_pairs'] = {}
+        stat['bindings'] = {}
+        # stat['bindings'] = np.zeros(self.num_bindings)
+        # binding probability
+        # prob_sent: change format
+        for si, state in enumerate(corpus['target']):
+
+            p = corpus['prob_sent'][si]
+            # stat['bindings'] += p * state
+            gp_key = tuple(np.where(state == 1)[0])
+            stat['trees'][gp_key] = p
+
+            for bid in list(gp_key):
+                if bid not in stat['bindings']:
+                    stat['bindings'][bid] = p
+                else:
+                    stat['bindings'][bid] += p
+
+            for role in self.role_names:
+                if not self.hg.roles.is_terminal(role):
+                    daughters = self.hg.roles.get_daughters(role)
+                    l = daughters['l']
+                    r = daughters['r']
+                    idx = self.find_roles(role)
+                    idx_l = self.find_roles(l)
+                    idx_r = self.find_roles(r)
+                    f_m = np.argmax(state[idx])
+                    f_l = np.argmax(state[idx_l])
+                    f_r = np.argmax(state[idx_r])
+                    treelet = (idx[f_m], idx_l[f_l], idx_r[f_r])
+                    pair_l = (idx[f_m], idx_l[f_l])
+                    pair_r = (idx[f_m], idx_r[f_r])
+
+                    if treelet in stat['treelets']:
+                        stat['treelets'][treelet] += p
+                    else:
+                        stat['treelets'][treelet] = p
+
+                    if pair_l in stat['binding_pairs']:
+                        stat['binding_pairs'][pair_l] += p
+                    else:
+                        stat['binding_pairs'][pair_l] = p
+
+                    if pair_r in stat['binding_pairs']:
+                        stat['binding_pairs'][pair_r] += p
+                    else:
+                        stat['binding_pairs'][pair_r] = p
+
+        return stat
+
+    def subset_corpus(self, bnames):
+        # NOTE: Currently, filler name types (e.g., A instead of A:0)
+        # are assumed to be used in binding names in both bnames and self.corpus['sentence'].
+
+        if not isinstance(bnames, list):
+            sys.exit('`bnames` should be a list object.')
+
+        nsent = len(self.corpus['sentence'])
+
+        idx = []
+        for si, sent in enumerate(self.corpus['sentence']):
+            if set(bnames).issubset(set(sent)):
+                idx.append(si)
+
+        corpus = {}
+        for key in self.corpus:
+            corpus[key] = [self.corpus[key][si]
+                           for si in range(nsent)
+                           if si in idx]
+            if key != 'sentence':
+                corpus[key] = np.array(corpus[key])
+
+        # Normalize probabilities
+        corpus['prob_sent'] /= corpus['prob_sent'].sum()
+
+        return corpus
+
+    def run_wrapup(self, update_q_discrete=False, log_trace=False, clear_input=True):
+        # self.opts['q_max'] = q_max
+        dur = np.max(self.opts['q_max'] - self.q)
+        if clear_input:
+            self.clear_input()
+        if self.train_opts['update_scale_constants']:
+            self.update_scale_constants(pos=0)
+        if update_q_discrete:
+            update_q = False
+            self.q = self.opts['q_max'] * np.ones(self.num_roles)
+        else:
+            update_q = True
+
+        # experimental
+        if self.train_opts['apply_wrapup_scale_constants']:
+            self.update_scale_constants(pos=1)
+
+        if self.opts['use_runC']:
+            self.runC(dur / self.opts['q_rate'],
+                      log_trace=log_trace, update_q=update_q)
+        else:
+            self.run(dur / self.opts['q_rate'],
+                     log_trace=log_trace, update_q=update_q)
+        self.store.append({'actC': self.actC, 'qvec': self.q})
+
+    def read_grid_point(self, actC=None, disp=False):
+
+        if actC is None:
+            actCmat = self.vec2mat(actC=self.actC)
+        else:
+            actCmat = self.vec2mat(actC=actC)
+
+        winner_idx = np.argmax(actCmat, axis=0)
+        winners = [self.filler_names[ii] for ii in winner_idx]
+        winners = ["%s/%s" % bb for bb in zip(winners, self.role_names)]
+
+        if disp:
+            print(winners)
+        return winners
+
+    def check_convergence(self, tol, testvar='H_increase'):
+
+        if testvar == 'H_increase':
+            self.H_now = self.H()
+            if self.H_now - self.maxH > self.opts['min_H_increase']:
+                self.maxH = self.H_now.copy()
+                self.lapse = 0
+            else:
+                self.lapse += self.dt
+
+            if self.lapse > tol:
+                self.converged = True
 
     def initialize(self, train_opts=None):
 
@@ -2407,3 +3241,124 @@ class GscNet():
         f = open(filename, 'wb')
         pickle.dump(net, f)
         f.close()
+
+    #####################################################################
+    #
+    # Utility functions
+    #
+    #####################################################################
+
+    def _compute_recommended_bowl_strength(self):
+        '''Compute the recommended value of bowl strength.
+        Note that the value may change depending on external input.'''
+
+        # Condition 1: beta > eig_max to be stable
+        # WC must be a symmetric matrix. So eigh() was used instead of eig()
+        eigvals, eigvecs = np.linalg.eigh(self.WC)
+        eig_max = max(eigvals)
+
+        if np.sum(abs(self.bowl_center)) > 0:
+            # TODO(PWC) Check there is only one binding
+
+            # Condition 2: beta > beta1
+            beta1 = -min((self.bC + self.extC) / self.bowl_center)
+            # Condition 3: beta > beta2  [CHECK]
+            beta2 = max(
+                (self.bC + self.extC + eig_max) / (1 - self.bowl_center))
+            val = max(eig_max, beta1, beta2)
+        else:
+            val = eig_max
+
+        return val
+
+    #####################################################################
+    #
+    # Traces
+    #
+    #####################################################################
+
+    def initialize_traces(self, trace_list='all'):
+        """Create storage for traces."""
+
+        if trace_list == 'all':
+            trace_list = self.opts['trace_varnames']
+        else:
+            if not isinstance(trace_list, list):
+                msg = "trace_list must be a list object."
+                sys.exit(msg)
+
+            var_not_in_varnames = [var for var in trace_list
+                                   if var not in self.opts['trace_varnames']]
+            if len(var_not_in_varnames) > 0:
+                msg = ('No variable in trace_list is found. '
+                       'Currently, the following variables are available:\n')
+                sys.exit(msg + self.opts['trace_varnames'])
+
+        if hasattr(self, 'traces'):
+            for key in trace_list:
+                self.traces[key] = list(self.traces[key])
+        else:
+            self.traces = {}
+            for key in trace_list:
+                self.traces[key] = []
+
+            self.update_traces()
+
+    def update_traces(self):
+        """Log traces"""
+
+        if 'act' in self.traces:
+            self.traces['act'].append(self.act)
+        if 'actC' in self.traces:
+            self.traces['actC'].append(self.actC)
+        if 'extC' in self.traces:
+            self.traces['extC'].append(self.extC)
+        if 'H' in self.traces:
+            self.traces['H'].append(self.H())
+        if 'Hg' in self.traces:
+            self.traces['Hg'].append(self.Hg())
+        if 'Hq0' in self.traces:
+            self.traces['Hq0'].append(self.Hq0(q=np.ones(self.q.shape)))
+            # self.traces['Hq0'].append(self.Hq0())
+        if 'Hq1' in self.traces:
+            self.traces['Hq1'].append(self.Hq1())
+        if 'q' in self.traces:
+            self.traces['q'].append(self.q)
+        if 't' in self.traces:
+            self.traces['t'].append(self.t)
+        if 'T' in self.traces:
+            self.traces['T'].append(self.T)
+        if 'maxeig' in self.traces:
+            self.traces['maxeig'].append(maxeig(self.HHess()))
+        if 'Hq0_role' in self.traces:
+            self.traces['Hq0_role'].append(
+                self.Hq0_role(q=np.ones(self.q.shape)))
+        if 'scale_constants' in self.traces:
+            self.traces['scale_constants'].append(self.scale_constants)
+
+    def finalize_traces(self):
+        """Convert list objects of traces to NumPy array objects."""
+
+        for key in self.opts['trace_varnames']:
+            self.traces[key] = np.array(self.traces[key])
+
+    #####################################################################
+    def HGradC(self, actC=None, q=None):
+        # conceptual coordinates (ignoring similarity structure)
+        if actC is None:
+            actC = self.actC
+            actCmat = self.vec2mat(actC)
+        else:
+            # act = self.C2N(actC=actC)
+            actCmat = self.vec2mat(actC)
+        if q is None:
+            q = self.q
+
+        hgrad_g = self.WC.dot(actC) + self.bC + self.extC
+        hgrad_b = self.opts['bowl_strength'] * \
+            (self.opts['bowl_center'] - actC)
+        hgrad_q0 = -2 * self.extend_rvec(rvec=q) * \
+            actC * (1 - actC) * (1 - 2 * actC)
+        ssq = np.sum(actCmat ** 2, axis=0)
+        hgrad_q1 = -4 * self.opts['m'] * actC * self.extend_rvec(rvec=ssq - 1)
+        return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
