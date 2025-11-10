@@ -1247,7 +1247,8 @@ class BrickRole(object):
 
         self._set_opts(max_sent_len=max_sent_len, use_hnf=use_hnf)
         self._create_role_names()
-        self._create_fast_lookups()
+        # self._create_fast_lookups()
+        self._create_fastER_lookups()
 
     def _set_opts(self, max_sent_len, use_hnf):
 
