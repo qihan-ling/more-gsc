@@ -1100,11 +1100,21 @@ class GscNet():
         return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
     def find_fillers_fast(self, fnames):
-        '''Fast O(1) version of find_fillers.'''
+        '''Fast O(1) version of find_fillers. Returns BINDING indices.'''
         if not isinstance(fnames, list):
             fnames = [fnames]
 
-        return [self.filler_name_to_idx[fn] for fn in fnames if fn in self.filler_name_to_idx]
+        if len(fnames) == 1:
+            filler_idx = self.filler_name_to_idx.get(fnames[0])
+            return self.filler_to_binding_indices[filler_idx] if filler_idx is not None else np.array([], dtype=np.int32)
+
+        result = []
+        for fname in fnames:
+            filler_idx = self.filler_name_to_idx.get(fname)
+            if filler_idx is not None:
+                result.append(self.filler_to_binding_indices[filler_idx])
+
+        return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
     def find_bindings_fast(self, bnames):
         '''Fast O(1) version of find_bindings.'''
