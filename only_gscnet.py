@@ -3523,14 +3523,6 @@ class GscNet():
         return [idx for idx, rname in enumerate(self.role_names)
                 if rname in rnames]
 
-    def find_bindings(self, bnames):
-
-        if not isinstance(bnames, list):
-            bnames = [bnames]
-
-        return [bi for bi, bname in enumerate(self.binding_names)
-                if bname in bnames]
-
     def find_fillers(self, fnames):
         '''Returns (list) of indices for fnames (str or list of str)'''
 
