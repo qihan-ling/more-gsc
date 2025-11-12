@@ -1042,7 +1042,7 @@ class GscNet():
             print("WARNING: Phase 1 not found!")
             return
 
-        # Binding indices for each role
+        # Binding indices for each role (by role index)
         self.role_to_binding_indices = {}
         for ri in range(self.hg.num_roles):
             start = ri * self.hg.num_fillers
@@ -1050,14 +1050,40 @@ class GscNet():
             self.role_to_binding_indices[ri] = np.arange(
                 start, end, dtype=np.int32)
 
-        # Binding indices for each filler
+        # Binding indices for each filler (by filler index)
         self.filler_to_binding_indices = {}
         for fi in range(self.hg.num_fillers):
             self.filler_to_binding_indices[fi] = np.arange(
                 fi, self.hg.num_bindings, self.hg.num_fillers, dtype=np.int32
             )
 
-        # Use HG's pre-computed mappings (from Phase 1)
+        # Build role_name -> binding_indices mapping (matching slow find_roles logic)
+        self.role_name_to_binding_indices = {}
+        for bi, bname in enumerate(self.binding_names):
+            role_name = bname.split('/')[1]
+            if role_name not in self.role_name_to_binding_indices:
+                self.role_name_to_binding_indices[role_name] = []
+            self.role_name_to_binding_indices[role_name].append(bi)
+
+        # Convert lists to numpy arrays
+        for role_name in self.role_name_to_binding_indices:
+            self.role_name_to_binding_indices[role_name] = np.array(
+                self.role_name_to_binding_indices[role_name], dtype=np.int32)
+
+        # Build filler_name -> binding_indices mapping (matching slow find_fillers logic)
+        self.filler_name_to_binding_indices = {}
+        for bi, bname in enumerate(self.binding_names):
+            filler_name = bname.split('/')[0]
+            if filler_name not in self.filler_name_to_binding_indices:
+                self.filler_name_to_binding_indices[filler_name] = []
+            self.filler_name_to_binding_indices[filler_name].append(bi)
+
+        # Convert lists to numpy arrays
+        for filler_name in self.filler_name_to_binding_indices:
+            self.filler_name_to_binding_indices[filler_name] = np.array(
+                self.filler_name_to_binding_indices[filler_name], dtype=np.int32)
+
+        # Use HG's pre-computed mappings (for other purposes)
         self.role_name_to_idx = self.hg.roles.role_name_to_idx
         self.filler_name_to_idx = self.hg.g.filler_name_to_idx
 
@@ -1083,36 +1109,42 @@ class GscNet():
         print("✓ GscNet fast lookups complete!")
 
     def find_roles_fast(self, rnames):
-        '''Fast O(1) version of find_roles.'''
+        '''Fast O(1) version of find_roles. Returns BINDING indices where role matches.
+
+        Equivalent to:
+            role_list = [bb.split('/')[1] for bb in self.binding_names]
+            return [ii for ii, rr in enumerate(role_list) if rr in rnames]
+        '''
         if not isinstance(rnames, list):
             rnames = [rnames]
 
         if len(rnames) == 1:
-            role_idx = self.role_name_to_idx.get(rnames[0])
-            return self.role_to_binding_indices[role_idx] if role_idx is not None else np.array([], dtype=np.int32)
+            return self.role_name_to_binding_indices.get(rnames[0], np.array([], dtype=np.int32))
 
         result = []
         for rname in rnames:
-            role_idx = self.role_name_to_idx.get(rname)
-            if role_idx is not None:
-                result.append(self.role_to_binding_indices[role_idx])
+            if rname in self.role_name_to_binding_indices:
+                result.append(self.role_name_to_binding_indices[rname])
 
         return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
     def find_fillers_fast(self, fnames):
-        '''Fast O(1) version of find_fillers. Returns BINDING indices.'''
+        '''Fast O(1) version of find_fillers. Returns BINDING indices where filler matches.
+
+        Equivalent to:
+            filler_list = [bb.split('/')[0] for bb in self.binding_names]
+            return [ii for ii, ff in enumerate(filler_list) if ff in fnames]
+        '''
         if not isinstance(fnames, list):
             fnames = [fnames]
 
         if len(fnames) == 1:
-            filler_idx = self.filler_name_to_idx.get(fnames[0])
-            return self.filler_to_binding_indices[filler_idx] if filler_idx is not None else np.array([], dtype=np.int32)
+            return self.filler_name_to_binding_indices.get(fnames[0], np.array([], dtype=np.int32))
 
         result = []
         for fname in fnames:
-            filler_idx = self.filler_name_to_idx.get(fname)
-            if filler_idx is not None:
-                result.append(self.filler_to_binding_indices[filler_idx])
+            if fname in self.filler_name_to_binding_indices:
+                result.append(self.filler_name_to_binding_indices[fname])
 
         return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
