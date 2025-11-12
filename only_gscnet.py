@@ -3516,12 +3516,31 @@ class GscNet():
 
         return dWC, destr, dq, dbC
 
-    def find_roles(self, rnames):
+    def find_roles(self, role_name):
+        '''Return (list) of binding indices for a given role_names (str or list).
 
-        if not isinstance(rnames, list):
-            rnames = [rnames]
-        return [idx for idx, rname in enumerate(self.role_names)
-                if rname in rnames]
+        Args:
+            role_names: (str) role name or
+                        (list of str) role names
+
+        Precondition:
+            role_names must contain legitimate role names.
+
+        Examples:
+            >>> net.find_role('0')
+            >>> net.find_role(['0', '1'])
+        '''
+
+        if not isinstance(role_name, list):
+            role_name = [role_name]
+
+        role_list = [bb.split('/')[1] for bb in self.binding_names]
+        role_idx = []
+        for jj, role in enumerate(role_name):
+            idx = [ii for ii, rr in enumerate(role_list) if role == rr]
+            role_idx += idx
+
+        return role_idx
 
     def find_bindings(self, binding_names):
         '''Return (list) of binding indices for a given binding_names (str or list).
@@ -3542,13 +3561,31 @@ class GscNet():
             binding_names = [binding_names]
         return [self.binding_names.index(bb) for bb in binding_names]
 
-    def find_fillers(self, fnames):
-        '''Returns (list) of indices for fnames (str or list of str)'''
+    def find_fillers(self, filler_name):
+        '''Return (list) of binding indices for a given filler_names (str or list).
 
-        if not isinstance(fnames, list):
-            fnames = [fnames]
-        return [fi for fi, fname in enumerate(self.filler_names)
-                if fname in fnames]
+        Args:
+            filler_names: (str) filler name or
+                          (list of str) filler names
+
+        Precondition:
+            filler_names must contain legitimate filler names.
+
+        Examples:
+            >>> net.find_fillers('A')
+            >>> net.find_fillers(['A', 'B'])
+        '''
+
+        if not isinstance(filler_name, list):
+            filler_name = [filler_name]
+
+        filler_list = [bb.split('/')[0] for bb in self.binding_names]
+        filler_idx = []
+        for jj, filler in enumerate(filler_name):
+            idx = [ii for ii, ff in enumerate(filler_list) if filler == ff]
+            filler_idx += idx
+
+        return filler_idx
 
     def average_weight2(self):
 
