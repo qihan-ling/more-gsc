@@ -447,7 +447,7 @@ def compute_metric(net, actC_trace, treelet):
     for bname in treelet:
         roles.append(bname.split('/')[1])
 
-    idx = net.find_bindings(treelet)
+    idx = net.find_bindings_fast(treelet)
     dp = actC_trace[:, idx].sum(axis=1) / len(roles)
 
     return dp
@@ -1103,8 +1103,17 @@ class GscNet():
         '''Fast O(1) version of find_fillers.'''
         if not isinstance(fnames, list):
             fnames = [fnames]
+        if len(fnames) == 1:
+            filler_idx = self.filler_name_to_idx.get(fnames[0])
+            return self.filler_to_binding_indices[filler_idx] if filler_idx is not None else np.array([], dtype=np.int32)
 
-        return [self.filler_name_to_idx[fn] for fn in fnames if fn in self.filler_name_to_idx]
+        result = []
+        for fname in fnames:
+            filler_idx = self.filler_name_to_idx.get(fname)
+            if filler_idx is not None:
+                result.append(self.filler_to_binding_indices[filler_idx])
+
+        return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
     def find_bindings_fast(self, bnames):
         '''Fast O(1) version of find_bindings.'''
@@ -1565,7 +1574,7 @@ class GscNet():
                         for ri in range(len(self.hg.role_names)):
                             rname = self.role_names[ri]
                             bname = fname + self.hg.opts['bsep'] + rname
-                            idx = self.find_bindings(bname)
+                            idx = self.find_bindings_fast(bname)
                             # lv, pos = self.hg.roles.str2tuple(rname)
                             lv, pos = self.hg.roles.role_tuples[ri]
                             if lv == 1:
@@ -1595,7 +1604,7 @@ class GscNet():
                         for ri in range(len(self.hg.role_names)):
                             rname = self.role_names[ri]
                             bname = fname + self.hg.opts['bsep'] + rname
-                            idx = self.find_bindings(bname)
+                            idx = self.find_bindings_fast(bname)
                             # lv, pos = self.hg.roles.str2tuple(rname)
                             lv, pos = self.hg.roles.role_tuples[ri]
                             if lv == 1:
@@ -1651,8 +1660,8 @@ class GscNet():
             >>> net.set_weight('A/0', ['B/1', 'C/2'], 2.)
         '''
 
-        idx1 = self.find_bindings(bname1)
-        idx2 = self.find_bindings(bname2)
+        idx1 = self.find_bindings_fast(bname1)
+        idx2 = self.find_bindings_fast(bname2)
         if not cumulative:
             if symmetric:
                 self.WC[idx1, idx2] = self.WC[idx2, idx1] = weight
@@ -1687,7 +1696,7 @@ class GscNet():
             >>> net.set_bias('A/0', -1.)
         '''
 
-        idx = self.find_bindings(binding_name)
+        idx = self.find_bindings_fast(binding_name)
         self.bC[idx] = bias
         if c2n:
             self._set_biases()
@@ -2144,14 +2153,14 @@ class GscNet():
 
     def get_discrete_state(self, binding_names):
 
-        idx = self.find_bindings(binding_names)
+        idx = self.find_bindings_fast(binding_names)
         actC = np.zeros(self.num_bindings)
         actC[idx] = 1.0
         return actC
 
     def set_discrete_state(self, binding_names):
 
-        idx = self.find_bindings(binding_names)
+        idx = self.find_bindings_fast(binding_names)
         self.actC = np.zeros(self.num_bindings)
         self.actC[idx] = 1.0
         self.actCmat = self.vec2mat()
@@ -2975,7 +2984,7 @@ class GscNet():
 
             self.run_wrapup(update_q_discrete=update_q_discrete)
             gp = self.read_grid_point(disp=False)
-            idx = self.find_bindings(gp)
+            idx = self.find_bindings_fast(gp)
             self.set_discrete_state(gp)
 
             if list(self.actC) not in corpus['target']:
@@ -3195,7 +3204,7 @@ class GscNet():
             binding_names = binding_names_new
 
         curr_extC = np.zeros(self.num_bindings)
-        idx = self.find_bindings(binding_names)
+        idx = self.find_bindings_fast(binding_names)
         curr_extC[idx] = 1.
 
         self.extC += self.estr * curr_extC
@@ -3516,21 +3525,6 @@ class GscNet():
 
         return dWC, destr, dq, dbC
 
-    def find_roles(self, rnames):
-
-        if not isinstance(rnames, list):
-            rnames = [rnames]
-        return [idx for idx, rname in enumerate(self.role_names)
-                if rname in rnames]
-
-    def find_fillers(self, fnames):
-        '''Returns (list) of indices for fnames (str or list of str)'''
-
-        if not isinstance(fnames, list):
-            fnames = [fnames]
-        return [fi for fi, fname in enumerate(self.filler_names)
-                if fname in fnames]
-
     def average_weight2(self):
 
         WC_L = 0.
@@ -3690,6 +3684,7 @@ class GscNet():
 
             if 'free_update_null' in self.train_opts:
                 if self.train_opts['free_update_null']:
+                    # idx_null = self.find_fillers(self.hg.g.opts['null'])
                     idx_null = self.find_fillers_fast(self.hg.g.opts['null'])
                     bC_new[idx_null] = bC[idx_null]
 
