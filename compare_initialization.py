@@ -30,27 +30,51 @@ hg_new = gsc_new.HarmonicGrammar(pcfg=PCFG_G1, root='S', max_sent_len=5)
 print(f"\nNumber of fillers:")
 print(f"  Original: {len(hg_orig.filler_names)}")
 print(f"  New:      {len(hg_new.filler_names)}")
+if len(hg_orig.filler_names) != len(hg_new.filler_names):
+    print(f"  ⚠️  MISMATCH: {abs(len(hg_orig.filler_names) - len(hg_new.filler_names))} filler difference!")
 
 print(f"\nNumber of roles:")
 print(f"  Original: {len(hg_orig.role_names)}")
 print(f"  New:      {len(hg_new.role_names)}")
+if len(hg_orig.role_names) != len(hg_new.role_names):
+    print(f"  ⚠️  MISMATCH: {abs(len(hg_orig.role_names) - len(hg_new.role_names))} role difference!")
 
 print(f"\nNumber of bindings:")
 print(f"  Original: {len(hg_orig.binding_names)}")
 print(f"  New:      {len(hg_new.binding_names)}")
+if len(hg_orig.binding_names) != len(hg_new.binding_names):
+    print(f"  ⚠️  MISMATCH: {abs(len(hg_orig.binding_names) - len(hg_new.binding_names))} binding difference!")
 
-# Check if filler names match
-filler_mismatch = []
-for i, (fo, fn) in enumerate(zip(hg_orig.filler_names, hg_new.filler_names)):
-    if fo != fn:
-        filler_mismatch.append((i, fo, fn))
+# Show filler names if counts differ
+if len(hg_orig.filler_names) != len(hg_new.filler_names):
+    print(f"\nOriginal filler names ({len(hg_orig.filler_names)}):")
+    print(f"  {hg_orig.filler_names}")
+    print(f"\nNew filler names ({len(hg_new.filler_names)}):")
+    print(f"  {hg_new.filler_names}")
 
-if filler_mismatch:
-    print(f"\n✗ Filler name mismatches: {len(filler_mismatch)}")
-    for i, fo, fn in filler_mismatch[:5]:
-        print(f"    Index {i}: orig='{fo}', new='{fn}'")
+    # Find which fillers are in new but not original
+    orig_set = set(hg_orig.filler_names)
+    new_set = set(hg_new.filler_names)
+    extra_in_new = new_set - orig_set
+    missing_in_new = orig_set - new_set
+
+    if extra_in_new:
+        print(f"\n  Extra fillers in NEW ({len(extra_in_new)}): {sorted(extra_in_new)}")
+    if missing_in_new:
+        print(f"\n  Missing in NEW ({len(missing_in_new)}): {sorted(missing_in_new)}")
 else:
-    print(f"\n✓ All filler names match")
+    # Check if filler names match
+    filler_mismatch = []
+    for i, (fo, fn) in enumerate(zip(hg_orig.filler_names, hg_new.filler_names)):
+        if fo != fn:
+            filler_mismatch.append((i, fo, fn))
+
+    if filler_mismatch:
+        print(f"\n✗ Filler name mismatches: {len(filler_mismatch)}")
+        for i, fo, fn in filler_mismatch[:5]:
+            print(f"    Index {i}: orig='{fo}', new='{fn}'")
+    else:
+        print(f"\n✓ All filler names match")
 
 # Check rules
 rules_orig = hg_orig.g.get_rules()
