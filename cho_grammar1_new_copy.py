@@ -157,6 +157,10 @@ for t in commitment_levels:
     max_sent_len = net.hg.opts['max_sent_len']
     dq = np.ones(max_sent_len) * (float(t) / max_sent_len)
 
+    # Set random seed for reproducibility - prevents RNG state carryover between commitment levels
+    # Each commitment level gets a deterministic but unique seed
+    np.random.seed(2048 + t)
+
     # Test parsing using gsc.test_parse_inc
     try:
         parse_results = gsc.test_parse_inc(
