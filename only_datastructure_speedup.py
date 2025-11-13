@@ -314,7 +314,7 @@ class PCFG():
                 # Iterate through ALL rules, not filtered subsets
                 for rule in rules:
                     # Check if rule is unary
-                    is_unary = rule.get('d2') is None
+                    is_unary = self.is_hnf_unary_rule(rule)
 
                     # Check if mother appears as d1
                     if rule['d1'] == mother:
