@@ -90,13 +90,13 @@ class PCFG():
         self._cnf2hnf()
         # self._tokenize_cnf()
         self._tokenize_cnf_optimized()
-        print("DEBUG1")
+        # print("DEBUG1")
         # self._tokenize_fillers()
         self._tokenize_fillers_optimized()
-        print("DEBUG2")
+        # print("DEBUG2")
         self._sort_rules()
         # lookup will still be very sloe for 10K grammar
-        print("DEBUG3")
+        # print("DEBUG3")
         # self._create_fast_lookups_pcfg()
         self._create_fastER_lookups_pcfg()
 
@@ -297,91 +297,57 @@ class PCFG():
             self._add_names()
 
     def _tokenize_fillers_optimized(self):
-        """Replace filler symbols with position-specific filler symbols.
-
-        OPTIMIZED VERSION - O(n) instead of O(n²)
-        """
-        import time
+        """Fixed version"""
 
         if self.opts['use_pos_f']:
-            t0 = time.time()
-
             sep = self.opts['sep']
             role_names = self.opts['pos_f']
-
             rules = self.rules.copy()
             mothers = unique([rule['m'] for rule in rules])
 
-            # ==================== OPTIMIZATION 1: Build lookup structures ====================
-            # Pre-group rules by where each symbol appears (O(n) preprocessing)
-            rules_with_d1 = {}  # symbol -> [rules where d1 == symbol]
-            rules_with_d2 = {}  # symbol -> [rules where d2 == symbol]
-            unary_rule_indices = set()  # Track which rules are unary
-
-            for i, rule in enumerate(rules):
-                # Cache unary status
-                if rule.get('d2') is None:
-                    unary_rule_indices.add(i)
-
-                # Build d1 lookup
-                if rule['d1'] is not None:
-                    if rule['d1'] not in rules_with_d1:
-                        rules_with_d1[rule['d1']] = []
-                    rules_with_d1[rule['d1']].append((i, rule))
-
-                # Build d2 lookup
-                if rule.get('d2') is not None:
-                    if rule['d2'] not in rules_with_d2:
-                        rules_with_d2[rule['d2']] = []
-                    rules_with_d2[rule['d2']].append((i, rule))
-
-            print(f"    Built lookup structures in {time.time()-t0:.3f}s")
-            # ================================================================================
-
-            # ==================== OPTIMIZATION 2: Build type->token mapping =================
-            type_token_dict = {}  # mother -> list of tokens
+            # Build type->token mapping with CORRECT logic
+            type_token_dict = {}
 
             for mother in mothers:
                 tokens = []
 
-                # Use lookup dicts instead of scanning all rules
-                for i, rule in rules_with_d1.get(mother, []):
-                    if i in unary_rule_indices:  # O(1) check
-                        tokens.append(rule['d1'] + sep + role_names[2])
-                    else:
-                        tokens.append(rule['d1'] + sep + role_names[0])
+                # Iterate through ALL rules, not filtered subsets
+                for rule in rules:
+                    # Check if rule is unary
+                    is_unary = rule.get('d2') is None
 
-                for i, rule in rules_with_d2.get(mother, []):
-                    if i not in unary_rule_indices:  # O(1) check
-                        tokens.append(rule['d2'] + sep + role_names[1])
+                    # Check if mother appears as d1
+                    if rule['d1'] == mother:
+                        if is_unary:
+                            tokens.append(mother + sep + role_names[2])
+                        else:
+                            tokens.append(mother + sep + role_names[0])
 
+                    # Check if mother appears as d2 (only for binary rules)
+                    if not is_unary and rule.get('d2') == mother:
+                        tokens.append(mother + sep + role_names[1])
+
+                # Check if mother is a root symbol
                 if self.get_types(mother)[0] in self.root:
                     tokens.append(mother + sep + role_names[0])
 
-                # Remove duplicates and store
+                # Remove duplicates
                 type_token_dict[mother] = list(set(tokens))
-
-            print(f"    Built type->token mapping in {time.time()-t0:.3f}s")
-            # ================================================================================
-
-            # ==================== OPTIMIZATION 3: Generate new rules with set dedup =========
+            # print(f"DEBUG: Speedup type_token_dict is {type_token_dict}")
+            # NOW generate new rules using the correct mapping
             rules_new = []
-            rules_seen = set()  # Use set for O(1) deduplication
+            rules_seen = set()
 
-            for i, rule in enumerate(rules):
-                # O(1) dict lookup instead of O(n) list comprehension
-                tokens = type_token_dict.get(rule['m'], [])
-                if len(tokens) == 0:
-                    tokens = [rule['m']]
+            for rule in rules:
+                is_unary = rule.get('d2') is None
+                tokens = type_token_dict.get(rule['m'], [rule['m']])
 
                 for token in tokens:
-                    if i in unary_rule_indices:  # O(1) check
+                    if is_unary:
                         d1_new = rule['d1'] + sep + role_names[2]
-
-                        # Create hashable key for deduplication
                         rule_key = (token, d1_new, None, rule['p'])
 
-                        if rule_key not in rules_seen:  # O(1) set lookup
+                        if rule_key not in rules_seen:
                             rules_seen.add(rule_key)
                             rules_new.append({
                                 'm': token,
@@ -389,16 +355,12 @@ class PCFG():
                                 'd2': None,
                                 'p': rule['p']
                             })
-
-                    else:  # Binary rule
-                        d1_new = rule['d1'] + sep + \
-                            role_names[0] if rule['d1'] is not None else None
-                        d2_new = rule['d2'] + sep + \
-                            role_names[1] if rule['d2'] is not None else None
-
+                    else:
+                        d1_new = rule['d1'] + sep + role_names[0]
+                        d2_new = rule['d2'] + sep + role_names[1]
                         rule_key = (token, d1_new, d2_new, rule['p'])
 
-                        if rule_key not in rules_seen:  # O(1) set lookup
+                        if rule_key not in rules_seen:
                             rules_seen.add(rule_key)
                             rules_new.append({
                                 'm': token,
@@ -407,19 +369,136 @@ class PCFG():
                                 'p': rule['p']
                             })
 
-            print(
-                f"    Generated {len(rules_new)} rules in {time.time()-t0:.3f}s")
-            # ================================================================================
-
-            # Add separator to root symbols if needed
+            # Add separator to root symbols
             for rule in rules_new:
-                if self.opts['sep'] not in rule['m']:
+                if sep not in rule['m']:
                     rule['m'] += sep + role_names[0]
 
             self.rules = rules_new
             self._add_names()
+        # """Replace filler symbols with position-specific filler symbols.
 
-            print(f"    _tokenize_fillers completed in {time.time()-t0:.3f}s")
+        # OPTIMIZED VERSION - O(n) instead of O(n²)
+        # """
+        # import time
+
+        # if self.opts['use_pos_f']:
+        #     t0 = time.time()
+
+        #     sep = self.opts['sep']
+        #     role_names = self.opts['pos_f']
+
+        #     rules = self.rules.copy()
+        #     mothers = unique([rule['m'] for rule in rules])
+
+        #     # ==================== OPTIMIZATION 1: Build lookup structures ====================
+        #     # Pre-group rules by where each symbol appears (O(n) preprocessing)
+        #     rules_with_d1 = {}  # symbol -> [rules where d1 == symbol]
+        #     rules_with_d2 = {}  # symbol -> [rules where d2 == symbol]
+        #     unary_rule_indices = set()  # Track which rules are unary
+
+        #     for i, rule in enumerate(rules):
+        #         # Cache unary status
+        #         if rule.get('d2') is None:
+        #             unary_rule_indices.add(i)
+
+        #         # Build d1 lookup
+        #         if rule['d1'] is not None:
+        #             if rule['d1'] not in rules_with_d1:
+        #                 rules_with_d1[rule['d1']] = []
+        #             rules_with_d1[rule['d1']].append((i, rule))
+
+        #         # Build d2 lookup
+        #         if rule.get('d2') is not None:
+        #             if rule['d2'] not in rules_with_d2:
+        #                 rules_with_d2[rule['d2']] = []
+        #             rules_with_d2[rule['d2']].append((i, rule))
+
+        #     print(f"    Built lookup structures in {time.time()-t0:.3f}s")
+        #     # ================================================================================
+
+        #     # ==================== OPTIMIZATION 2: Build type->token mapping =================
+        #     type_token_dict = {}  # mother -> list of tokens
+
+        #     for mother in mothers:
+        #         tokens = []
+
+        #         # Use lookup dicts instead of scanning all rules
+        #         for i, rule in rules_with_d1.get(mother, []):
+        #             if i in unary_rule_indices:  # O(1) check
+        #                 tokens.append(rule['d1'] + sep + role_names[2])
+        #             else:
+        #                 tokens.append(rule['d1'] + sep + role_names[0])
+
+        #         for i, rule in rules_with_d2.get(mother, []):
+        #             if i not in unary_rule_indices:  # O(1) check
+        #                 tokens.append(rule['d2'] + sep + role_names[1])
+
+        #         if self.get_types(mother)[0] in self.root:
+        #             tokens.append(mother + sep + role_names[0])
+
+        #         # Remove duplicates and store
+        #         type_token_dict[mother] = list(set(tokens))
+
+        #     print(f"    Built type->token mapping in {time.time()-t0:.3f}s")
+        #     # ================================================================================
+
+        #     # ==================== OPTIMIZATION 3: Generate new rules with set dedup =========
+        #     rules_new = []
+        #     rules_seen = set()  # Use set for O(1) deduplication
+
+        #     for i, rule in enumerate(rules):
+        #         # O(1) dict lookup instead of O(n) list comprehension
+        #         tokens = type_token_dict.get(rule['m'], [])
+        #         if len(tokens) == 0:
+        #             tokens = [rule['m']]
+
+        #         for token in tokens:
+        #             if i in unary_rule_indices:  # O(1) check
+        #                 d1_new = rule['d1'] + sep + role_names[2]
+
+        #                 # Create hashable key for deduplication
+        #                 rule_key = (token, d1_new, None, rule['p'])
+
+        #                 if rule_key not in rules_seen:  # O(1) set lookup
+        #                     rules_seen.add(rule_key)
+        #                     rules_new.append({
+        #                         'm': token,
+        #                         'd1': d1_new,
+        #                         'd2': None,
+        #                         'p': rule['p']
+        #                     })
+
+        #             else:  # Binary rule
+        #                 d1_new = rule['d1'] + sep + \
+        #                     role_names[0] if rule['d1'] is not None else None
+        #                 d2_new = rule['d2'] + sep + \
+        #                     role_names[1] if rule['d2'] is not None else None
+
+        #                 rule_key = (token, d1_new, d2_new, rule['p'])
+
+        #                 if rule_key not in rules_seen:  # O(1) set lookup
+        #                     rules_seen.add(rule_key)
+        #                     rules_new.append({
+        #                         'm': token,
+        #                         'd1': d1_new,
+        #                         'd2': d2_new,
+        #                         'p': rule['p']
+        #                     })
+
+        #     print(
+        #         f"    Generated {len(rules_new)} rules in {time.time()-t0:.3f}s")
+        #     # ================================================================================
+
+        #     # Add separator to root symbols if needed
+        #     for rule in rules_new:
+        #         if self.opts['sep'] not in rule['m']:
+        #             rule['m'] += sep + role_names[0]
+
+        #     self.rules = rules_new
+        #     self._add_names()
+
+        #     print(f"    _tokenize_fillers completed in {time.time()-t0:.3f}s")
 
     def _tokenize_fillers(self):
         # Replace filler symbols with position-specific filler symbols
