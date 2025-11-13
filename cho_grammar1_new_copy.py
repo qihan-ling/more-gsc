@@ -176,6 +176,18 @@ for t in commitment_levels:
         for si in range(num_sentences):
             if si in parse_results:
                 acc_si = parse_results[si]['acc']
+
+                # DEBUG: Print details for S4 when it fails
+                word_seq = get_word_sequence(net.corpus['sentence'][si])
+                if word_seq == 'N Vpp P N Vi' and acc_si < 0.5:
+                    print(f"    [DEBUG S4 at t={t}] Accuracy: {acc_si:.2f}")
+                    if len(parse_results[si]['parse_incorr']) > 0:
+                        # Show what wrong parse looks like
+                        wrong_parse = parse_results[si]['parse_incorr'][0]
+                        wrong_bindings = [net.binding_names[i] for i in range(len(net.binding_names))
+                                        if wrong_parse[i] > 0.5]
+                        print(f"    [DEBUG S4] Wrong parse has {len(wrong_bindings)} active bindings")
+                        print(f"    [DEBUG S4] Sample wrong bindings: {wrong_bindings[:5]}")
             else:
                 acc_si = 0.0
             parsing_accuracy_per_sent[si].append(acc_si)
