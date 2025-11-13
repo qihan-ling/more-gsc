@@ -245,6 +245,9 @@ def plot_sentence_treelets(net, sent, sent_idx, target):
     print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
 
     # Reset network and run on this specific sentence with trace logging
+    # Set random seed for reproducibility - each sentence gets deterministic but unique seed
+    # This prevents RNG state carryover from previous sentences in the loop
+    np.random.seed(1024 + sent_idx)
     net.reset(mu=net.ep, sd=0.01)
     net.initialize_traces(trace_list='all')
 
