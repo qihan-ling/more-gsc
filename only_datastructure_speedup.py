@@ -340,8 +340,9 @@ class PCFG():
 
             for rule in rules:
                 is_unary = rule.get('d2') is None
-                tokens = type_token_dict.get(rule['m'], [rule['m']])
-
+                tokens = type_token_dict.get(rule['m'], [])
+                if len(tokens) == 0:
+                    tokens = [rule['m']]
                 for token in tokens:
                     if is_unary:
                         d1_new = rule['d1'] + sep + role_names[2]
@@ -356,8 +357,15 @@ class PCFG():
                                 'p': rule['p']
                             })
                     else:
-                        d1_new = rule['d1'] + sep + role_names[0]
-                        d2_new = rule['d2'] + sep + role_names[1]
+                        if rule['d1'] is not None:
+                            d1_new = rule['d1'] + sep + role_names[0]
+                        else:
+                            d1_new = None
+
+                        if rule['d2'] is not None:
+                            d2_new = rule['d2'] + sep + role_names[1]
+                        else:
+                            d2_new = None
                         rule_key = (token, d1_new, d2_new, rule['p'])
 
                         if rule_key not in rules_seen:
