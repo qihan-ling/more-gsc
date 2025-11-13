@@ -88,16 +88,9 @@ class PCFG():
         self.pcfg_str = pcfg
         self._cnf()
         self._cnf2hnf()
-        self._tokenize_cnf()  # Use original, not optimized
-        # self._tokenize_cnf_optimized()  # BUG: Creates extra non-terminal mothers → extra fillers → 405 bindings instead of 195
-        print("DEBUG1")
-        self._tokenize_fillers()  # Use original, not optimized
-        # self._tokenize_fillers_optimized()
-        print("DEBUG2")
+        self._tokenize_cnf_optimized()  # Optimized O(n) version for large grammars
+        self._tokenize_fillers_optimized()  # Optimized O(n) version for large grammars
         self._sort_rules()
-        # lookup will still be very sloe for 10K grammar
-        print("DEBUG3")
-        # self._create_fast_lookups_pcfg()
         self._create_fastER_lookups_pcfg()
 
     def _set_opts(self):
