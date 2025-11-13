@@ -6359,7 +6359,7 @@ class GscNet():
         self.train_opts['bias_only'] = False   # if coef['treelets'] > 0,
         self.train_opts['update_estr'] = True
         self.train_opts['update_bowl_strength'] = True
-        self.train_opts['ep_method'] = ['newton', 'integration'][0]  # Use Newton for more accurate equilibrium
+        self.train_opts['ep_method'] = ['newton', 'integration'][1]  # Integration for scalability
         self.train_opts['use_actval'] = False
         # 15.
         self.train_opts['dur'] = self.opts['q_max'] / self.opts['q_rate']
