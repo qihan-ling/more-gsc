@@ -1028,6 +1028,35 @@ class GscNet():
             name: bi for bi, name in enumerate(self.hg.binding_names)
         }
 
+        # ============ BUILD NAME TO BINDING_INDICES MAPPINGS ============
+        # Required by find_roles_fast() and find_fillers_fast()
+
+        # Build role_name -> binding_indices mapping (matching slow find_roles logic)
+        self.role_name_to_binding_indices = {}
+        for bi, bname in enumerate(self.binding_names):
+            role_name = bname.split('/')[1]
+            if role_name not in self.role_name_to_binding_indices:
+                self.role_name_to_binding_indices[role_name] = []
+            self.role_name_to_binding_indices[role_name].append(bi)
+
+        # Convert lists to numpy arrays
+        for role_name in self.role_name_to_binding_indices:
+            self.role_name_to_binding_indices[role_name] = np.array(
+                self.role_name_to_binding_indices[role_name], dtype=np.int32)
+
+        # Build filler_name -> binding_indices mapping (matching slow find_fillers logic)
+        self.filler_name_to_binding_indices = {}
+        for bi, bname in enumerate(self.binding_names):
+            filler_name = bname.split('/')[0]
+            if filler_name not in self.filler_name_to_binding_indices:
+                self.filler_name_to_binding_indices[filler_name] = []
+            self.filler_name_to_binding_indices[filler_name].append(bi)
+
+        # Convert lists to numpy arrays
+        for filler_name in self.filler_name_to_binding_indices:
+            self.filler_name_to_binding_indices[filler_name] = np.array(
+                self.filler_name_to_binding_indices[filler_name], dtype=np.int32)
+
         elapsed = time.time() - t0
         print(f"✓ GscNet fast lookups built in {elapsed:.3f}s "
               f"({num_roles} roles, {num_fillers} fillers, {num_bindings} bindings)")
