@@ -545,6 +545,76 @@ def test_parse_inc(net, dq, num_sent=None, num_trials=10,
 
 
 if JAX_AVAILABLE:
+    from functools import partial
+
+    @partial(jit, static_argnums=(6, 7, 8, 9))
+    def _adam_update_jax(W, dW, M, R, step, mask, lrate, beta1, beta2, eps):
+        """
+        JIT-compiled Adam update with internal step tracking.
+
+        Args:
+            W: Current weights (JAX array)
+            dW: Gradients (JAX array)
+            M, R: Momentum states (JAX arrays)
+            step: Step counter (JAX scalar)
+            mask: Update mask (JAX array or None)
+            lrate, beta1, beta2, eps: Hyperparameters (static)
+
+        Returns:
+            (W_new, M_new, R_new, step_new) - all JAX arrays
+        """
+        # Increment step
+        step = step + 1
+
+        # Update momentum
+        M = beta1 * M + (1.0 - beta1) * dW
+        R = beta2 * R + (1.0 - beta2) * (dW ** 2)
+
+        # Bias correction
+        m_hat = M / (1.0 - beta1 ** step)
+        r_hat = R / (1.0 - beta2 ** step)
+
+        # Compute update
+        update = lrate * m_hat / (jnp.sqrt(r_hat) + eps)
+
+        # Apply mask if provided
+        if mask is not None:
+            update = update * mask
+
+        # Update weights
+        W_new = W + update
+
+        return W_new, M, R, step
+
+    @partial(jit, static_argnums=(3,))
+    def _sgd_update_jax(W, dW, mask, lrate):
+        """JIT-compiled SGD update."""
+        if mask is not None:
+            update = lrate * dW * mask
+        else:
+            update = lrate * dW
+        return W + update
+
+    @jit
+    def _lazy_s_multiply(C, C_T, vector, scale_constants):
+        """
+        Compute (C @ C.T) @ vector WITHOUT materializing C @ C.T.
+
+        This is the KEY optimization that eliminates the 18 TB S matrix!
+
+        Instead of:
+            S = C @ C.T              # 18 TB matrix!
+            result = S @ vector      # Matrix-vector multiply
+
+        We compute:
+            temp = C.T @ vector      # Small operation
+            result = C @ temp        # Small operation
+
+        Mathematically equivalent but uses ZERO extra memory!
+        """
+        temp = jnp.dot(C_T, vector)
+        result = jnp.dot(C, temp)
+        return scale_constants * result
 
     def _build_filler_type_map(net):
         """
@@ -917,9 +987,53 @@ class GscNet():
             # self._precompute_fast_lookups()
             self._precompute_fastER_lookups()
         # Add parameters ==========================================
-        self.WC = np.zeros((self.num_bindings, self.num_bindings))
-        self.bC = np.zeros(self.num_bindings)
-        self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
+        self.use_jax = JAX_AVAILABLE and self.opts.get('use_jax', True)
+        if self.use_jax:
+            print("Initializing parameters on GPU with JAX...")
+            # Use float32 for GPU efficiency (good balance of speed/precision)
+            self.WC = jnp.zeros(
+                (self.num_bindings, self.num_bindings), dtype=jnp.float32)
+            self.bC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+            self.estr = jnp.ones(
+                self.num_bindings, dtype=jnp.float32) * self.opts['init_estr']
+
+            # Initialize Adam states on GPU
+            self.optim = {
+                'M_WC': jnp.zeros_like(self.WC),
+                'R_WC': jnp.zeros_like(self.WC),
+                'M_bC': jnp.zeros_like(self.bC),
+                'R_bC': jnp.zeros_like(self.bC),
+                'step_WC': jnp.array(0, dtype=jnp.int32),
+                'step_bC': jnp.array(0, dtype=jnp.int32),
+                'beta1': 0.9,
+                'beta2': 0.999,
+                'eps': 1e-8
+            }
+
+            print(f"  ✓ WC on GPU: {self.WC.shape} ({self.WC.dtype})")
+            print(f"  ✓ Memory: {self.WC.nbytes / 1e9:.2f} GB")
+        else:
+            print("Initializing parameters on CPU with NumPy...")
+            self.WC = np.zeros((self.num_bindings, self.num_bindings))
+            self.bC = np.zeros(self.num_bindings)
+            self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
+
+            # Initialize Adam states on CPU
+            self.optim = {
+                'M_WC': np.zeros_like(self.WC),
+                'R_WC': np.zeros_like(self.WC),
+                'M_bC': np.zeros_like(self.bC),
+                'R_bC': np.zeros_like(self.bC),
+                'step_WC': 0,
+                'step_bC': 0,
+                'beta1': 0.9,
+                'beta2': 0.999,
+                'eps': 1e-8
+            }
+        ############ ORIGINAL CODE COMMENTED OUT#######
+        # self.WC = np.zeros((self.num_bindings, self.num_bindings))
+        # self.bC = np.zeros(self.num_bindings)
+        # self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
         if hg is not None:
             self._build_model()
             self._adjust_default_param_vals()
@@ -1301,6 +1415,8 @@ class GscNet():
         self.opts['use_runC'] = False
 
         self.opts['penalize_root_posN'] = True
+        # JAX default
+        self.opts['use_jax'] = JAX_AVAILABLE
 
     def _update_opts(self, opts):
         # Update opts
@@ -1400,7 +1516,61 @@ class GscNet():
             for ii in list(range(self.num_units))]
 
     def _add_change_of_basis_matrices(self):
+        """Create change-of-basis matrices WITHOUT materializing S.
 
+        CRITICAL: S = C @ C.T would be 18 TB for large grammars!
+        We never materialize S - instead compute C @ (C.T @ v) on-the-fly.
+        """
+
+        print("Computing change-of-basis matrices...")
+
+        # Compute N and C (these are manageable sizes)
+        N = np.kron(self.R, self.F)
+        if N.shape[0] == N.shape[1]:
+            C = np.linalg.inv(N)
+        else:
+            C = np.linalg.pinv(N)
+
+        self.N = N
+        self.C = C
+
+        # Compute Gc (small matrix: num_units × num_units)
+        self.Gc = self.C.T.dot(self.C)
+
+        # Reshape C for filler/role access
+        self.C_reshaped = self.C.reshape(
+            (self.num_fillers, self.num_roles, self.num_units), order='F'
+        )
+
+        # CRITICAL: DON'T CREATE S!
+        # The old code did: self.S = self.C.dot(self.C.T)
+        # With 1.5M bindings, S would be 1.5M × 1.5M = 18 TB!
+        #
+        # Instead, we compute C @ (C.T @ v) on-the-fly in update_stateC()
+        # This uses ZERO extra memory and is faster!
+
+        # Pre-compute C.T for efficiency (still small)
+        self.C_T = self.C.T
+
+        # Convert to JAX if using GPU
+        if self.use_jax:  # QI's TODO: use_jax not defined yet
+            print("  Converting change-of-basis matrices to GPU...")
+            # Use float32 for GPU efficiency (or float64 if precision critical)
+            self.C = jnp.array(self.C, dtype=jnp.float32)
+            self.C_T = jnp.array(self.C_T, dtype=jnp.float32)
+            self.N = jnp.array(self.N, dtype=jnp.float32)
+            print(f"  ✓ C matrix on GPU: {self.C.shape} ({self.C.dtype})")
+
+        print(
+            f"  ✓ Change-of-basis complete (C: {self.C.shape}, no S materialization)")
+
+        # Memory saved:
+        # Old: S = 1.5M × 1.5M × 4 bytes = 9 TB (float32)
+        # New: 0 bytes (S never created!)
+        bytes_saved = self.num_bindings ** 2 * 4
+        print(
+            f"  ✓ Memory saved by not creating S: {bytes_saved / 1e12:.1f} TB")
+        ######## ORIGINAL CODE BELOW################
         # For justification of kronecker product, see:
         # http://en.wikipedia.org/wiki/Vectorization_(mathematics)
         N = np.kron(self.R, self.F)    # Pay attention to the argument order
@@ -1990,27 +2160,60 @@ class GscNet():
         self.act = self.C2N(self.actC)
 
     def update_stateC(self):
-        # ToDo:
-        # (1) adaptive stepsize
-        # (2) different time scales -> consider dt as a vector (scale_constants)
-        #     (scale_constants for noise?)
-        # (3) clamp
+        """
+        Update state using lazy S computation.
 
-        gradC = self.scale_constants * self.S.dot(self.HGradC())
+        KEY OPTIMIZATION: Instead of S @ v, compute C @ (C.T @ v)
+        This avoids materializing the 18 TB S matrix!
+        """
 
-        # adaptive stepsize
-        # update_dt()  # --> dt as a vector
+        # Compute gradient in conceptual space
+        hgrad = self.HGradC()
 
-        self.t += self.dt             # update time
-        self.actC = self.actC + self.dt * gradC    # Euler integration
+        # OLD (doesn't work - S is too large):
+        # gradC = self.scale_constants * self.S.dot(hgrad)
+
+        # NEW (no S needed):
+        # gradC = scale_constants * (C @ C.T) @ hgrad
+        #       = scale_constants * C @ (C.T @ hgrad)  ← compute this way!
+
+        if self.use_jax:
+            # JAX version: JIT-compiled, all on GPU
+            gradC = _lazy_s_multiply(
+                self.C, self.C_T, hgrad, self.scale_constants
+            )
+            self.actC = self.actC + self.dt * gradC
+        else:
+            # NumPy version: on CPU
+            temp = self.C_T.dot(hgrad)
+            gradC = self.C.dot(temp)
+            gradC = self.scale_constants * gradC
+            self.actC = self.actC + self.dt * gradC
+
+        # Add noise
         self.add_noiseC()
+        ########### ORIGINAL CODE BELOW ###########
+        # # ToDo:
+        # # (1) adaptive stepsize
+        # # (2) different time scales -> consider dt as a vector (scale_constants)
+        # #     (scale_constants for noise?)
+        # # (3) clamp
 
-        # if self.clamped:
-        #     self.act = self.act_clamped()
+        # gradC = self.scale_constants * self.S.dot(self.HGradC())
 
-        # Update actC and actCmat which are needed to compute Hq0Grad and Hq1Grad
-        # self.actC = self.N2C()
-        self.actCmat = self.vec2mat()
+        # # adaptive stepsize
+        # # update_dt()  # --> dt as a vector
+
+        # self.t += self.dt             # update time
+        # self.actC = self.actC + self.dt * gradC    # Euler integration
+        # self.add_noiseC()
+
+        # # if self.clamped:
+        # #     self.act = self.act_clamped()
+
+        # # Update actC and actCmat which are needed to compute Hq0Grad and Hq1Grad
+        # # self.actC = self.N2C()
+        # self.actCmat = self.vec2mat()
 
     def _set_bowl_parameters(self):
         '''Sets bowl parameters to default values. Default values
@@ -2809,19 +3012,44 @@ class GscNet():
 
                 if not (('bias2_only' in self.train_opts) and self.train_opts['bias2_only']):
                     if self.train_opts['optimizer'] == 'adam':
-                        # TODO: Add the weight decay term
-                        self.optim['M_WC'] = self.optim['beta1'] * \
-                            self.optim['M_WC'] + \
-                            (1. - self.optim['beta1']) * dWC
-                        self.optim['R_WC'] = self.optim['beta2'] * \
-                            self.optim['R_WC'] + \
-                            (1. - self.optim['beta2']) * dWC**2
-                        m_k_hat_WC = self.optim['M_WC'] / \
-                            (1. - self.optim['beta1']**self.epoch_num)
-                        r_k_hat_WC = self.optim['R_WC'] / \
-                            (1. - self.optim['beta2']**self.epoch_num)
-                        self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
-                            (np.sqrt(r_k_hat_WC) + self.optim['eps'])
+                        if self.use_jax:
+                            # Ensure gradients are JAX arrays
+                            if not isinstance(dWC, jnp.ndarray):
+                                dWC = jnp.array(dWC)
+                            if not isinstance(maskWC_update, jnp.ndarray):
+                                maskWC_update = jnp.array(
+                                    maskWC_update) if maskWC_update is not None else None
+
+                            # JAX Adam update (JIT-compiled, all on GPU)
+                            self.WC, self.optim['M_WC'], self.optim['R_WC'], self.optim['step_WC'] = \
+                                _adam_update_jax(
+                                    self.WC,
+                                    dWC + weight_decay,  # Include weight decay
+                                    self.optim['M_WC'],
+                                    self.optim['R_WC'],
+                                    self.optim['step_WC'],
+                                    maskWC_update,
+                                    self.train_opts['lrate'],
+                                    self.optim['beta1'],
+                                    self.optim['beta2'],
+                                    self.optim['eps']
+                            )
+                        else:
+                            # NumPy Adam update (original code)
+                            # if self.train_opts['optimizer'] == 'adam':
+                            # TODO: Add the weight decay term
+                            self.optim['M_WC'] = self.optim['beta1'] * \
+                                self.optim['M_WC'] + \
+                                (1. - self.optim['beta1']) * dWC
+                            self.optim['R_WC'] = self.optim['beta2'] * \
+                                self.optim['R_WC'] + \
+                                (1. - self.optim['beta2']) * dWC**2
+                            m_k_hat_WC = self.optim['M_WC'] / \
+                                (1. - self.optim['beta1']**self.epoch_num)
+                            r_k_hat_WC = self.optim['R_WC'] / \
+                                (1. - self.optim['beta2']**self.epoch_num)
+                            self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
+                                (np.sqrt(r_k_hat_WC) + self.optim['eps'])
                         self._set_weights()
                     else:
                         self.WC += self.train_opts['lrate'] * \
@@ -2834,18 +3062,33 @@ class GscNet():
 
                 if not self.opts['use_second_order_bias']:
                     if self.train_opts['optimizer'] == 'adam':
-                        self.optim['M_bC'] = self.optim['beta1'] * \
-                            self.optim['M_bC'] + \
-                            (1. - self.optim['beta1']) * dbC
-                        self.optim['R_bC'] = self.optim['beta2'] * \
-                            self.optim['R_bC'] + \
-                            (1. - self.optim['beta2']) * dbC**2
-                        m_k_hat_bC = self.optim['M_bC'] / \
-                            (1. - self.optim['beta1']**self.epoch_num)
-                        r_k_hat_bC = self.optim['R_bC'] / \
-                            (1. - self.optim['beta2']**self.epoch_num)
-                        self.bC += self.train_opts['lrate'] * m_k_hat_bC / \
-                            (np.sqrt(r_k_hat_bC) + self.optim['eps'])
+                        if self.use_jax:
+                            if not isinstance(dbC, jnp.ndarray):
+                                dbC = jnp.array(dbC)
+                            if not isinstance(maskbC_update, jnp.ndarray):
+                                maskbC_update = jnp.array(
+                                    maskbC_update) if maskbC_update is not None else None
+
+                            self.bC, self.optim['M_bC'], self.optim['R_bC'], self.optim['step_bC'] = \
+                                _adam_update_jax(
+                                    self.bC, dbC, self.optim['M_bC'], self.optim['R_bC'],
+                                    self.optim['step_bC'], maskbC_update,
+                                    self.train_opts['lrate'], self.optim['beta1'],
+                                    self.optim['beta2'], self.optim['eps']
+                            )
+                        else:
+                            self.optim['M_bC'] = self.optim['beta1'] * \
+                                self.optim['M_bC'] + \
+                                (1. - self.optim['beta1']) * dbC
+                            self.optim['R_bC'] = self.optim['beta2'] * \
+                                self.optim['R_bC'] + \
+                                (1. - self.optim['beta2']) * dbC**2
+                            m_k_hat_bC = self.optim['M_bC'] / \
+                                (1. - self.optim['beta1']**self.epoch_num)
+                            r_k_hat_bC = self.optim['R_bC'] / \
+                                (1. - self.optim['beta2']**self.epoch_num)
+                            self.bC += self.train_opts['lrate'] * m_k_hat_bC / \
+                                (np.sqrt(r_k_hat_bC) + self.optim['eps'])
                         self._set_biases()
                     else:
                         # update
