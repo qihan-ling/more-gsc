@@ -978,6 +978,7 @@ class GscNet():
         self._update_opts(opts=opts)
         self._add_names()
         self._generate_encodings()
+        self.use_jax = JAX_AVAILABLE and self.opts.get('use_jax', True)
         self._add_change_of_basis_matrices()
         dur = time.time() - t0
         print('{} s for generating encodings'.format(dur))
@@ -987,7 +988,6 @@ class GscNet():
             # self._precompute_fast_lookups()
             self._precompute_fastER_lookups()
         # Add parameters ==========================================
-        self.use_jax = JAX_AVAILABLE and self.opts.get('use_jax', True)
         if self.use_jax:
             print("Initializing parameters on GPU with JAX...")
             # Use float32 for GPU efficiency (good balance of speed/precision)
