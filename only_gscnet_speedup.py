@@ -1042,21 +1042,38 @@ class GscNet():
         dur = time.time() - t0
         print('{} s for initializing parameter values'.format(dur))
 
-        self.extC = np.zeros(self.num_bindings)
-        self.ext = self.C2N(actC=self.extC)
-        self._set_bowl_parameters()
+        if self.use_jax:
+            # JAX version: create state variables on GPU
+            self.extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+            self.ext = self.C2N(actC=self.extC)
+            self._set_bowl_parameters()
 
-        self.q = self.opts['q_init'] * np.ones(self.num_roles)
-        self.T = self.opts['T_init']
-        self.dt = self.opts['dt_init']   # NOTE: Consider using a vector
+            self.q = jnp.ones(self.num_roles, dtype=jnp.float32) * self.opts['q_init']
+            self.T = self.opts['T_init']
+            self.dt = self.opts['dt_init']
 
-        # Add state variables =====================================
-        # Previously, implemented as a method _add_state_variables()
-        self.t = 0.
-        self.actC = np.zeros(self.num_bindings)
-        self.actCmat = self.vec2mat(self.actC)
-        self.act = self.C2N()
-        self.update_scale_constants(pos=0)
+            # Add state variables on GPU
+            self.t = 0.
+            self.actC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+            self.actCmat = self.vec2mat(self.actC)
+            self.act = self.C2N()
+            self.update_scale_constants(pos=0)
+        else:
+            # NumPy version: CPU arrays
+            self.extC = np.zeros(self.num_bindings)
+            self.ext = self.C2N(actC=self.extC)
+            self._set_bowl_parameters()
+
+            self.q = self.opts['q_init'] * np.ones(self.num_roles)
+            self.T = self.opts['T_init']
+            self.dt = self.opts['dt_init']
+
+            # Add state variables
+            self.t = 0.
+            self.actC = np.zeros(self.num_bindings)
+            self.actCmat = self.vec2mat(self.actC)
+            self.act = self.C2N()
+            self.update_scale_constants(pos=0)
 
         t0 = time.time()
         self.get_ep(method=self.opts['ep_method'])
@@ -2240,10 +2257,17 @@ class GscNet():
         must be updated after setting the weight and bias values.'''
 
         if isinstance(self.opts['bowl_center'], numbers.Number):
-            self.bowl_center = (self.opts['bowl_center'] *
-                                np.ones(self.num_bindings))
+            if self.use_jax:
+                self.bowl_center = (self.opts['bowl_center'] *
+                                    jnp.ones(self.num_bindings, dtype=jnp.float32))
+            else:
+                self.bowl_center = (self.opts['bowl_center'] *
+                                    np.ones(self.num_bindings))
         else:
-            self.bowl_center = self.opts['bowl_center']
+            if self.use_jax:
+                self.bowl_center = jnp.array(self.opts['bowl_center'], dtype=jnp.float32)
+            else:
+                self.bowl_center = self.opts['bowl_center']
 
         if self.opts['bowl_strength'] is None:
             self.opts['bowl_strength'] = (
@@ -2303,15 +2327,26 @@ class GscNet():
                                 weights[idx] = np.exp(-(pos0 - pos) * c)
 
             if q_only:
-                self.scale_constants = np.ones(self.num_bindings)
-                self.scale_constants_q = weights
+                if self.use_jax:
+                    self.scale_constants = jnp.ones(self.num_bindings, dtype=jnp.float32)
+                    self.scale_constants_q = jnp.array(weights, dtype=jnp.float32)
+                else:
+                    self.scale_constants = np.ones(self.num_bindings)
+                    self.scale_constants_q = weights
             else:
-                self.scale_constants = weights
-                self.scale_constants_q = np.ones(self.num_bindings)
+                if self.use_jax:
+                    self.scale_constants = jnp.array(weights, dtype=jnp.float32)
+                    self.scale_constants_q = jnp.ones(self.num_bindings, dtype=jnp.float32)
+                else:
+                    self.scale_constants = weights
+                    self.scale_constants_q = np.ones(self.num_bindings)
 
         else:
             # Not yet implemneted
-            self.scale_constants = np.ones(self.num_bindings)
+            if self.use_jax:
+                self.scale_constants = jnp.ones(self.num_bindings, dtype=jnp.float32)
+            else:
+                self.scale_constants = np.ones(self.num_bindings)
 
     def set_state(self, mu, sd=0.):
 
@@ -3501,7 +3536,10 @@ class GscNet():
 
     def clear_input(self):
 
-        self.extC = np.zeros(self.num_bindings)
+        if self.use_jax:
+            self.extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+        else:
+            self.extC = np.zeros(self.num_bindings)
         self.ext = self.C2N(self.extC)
 
     def set_input(self, binding_names,  # ext_vals=1.,
