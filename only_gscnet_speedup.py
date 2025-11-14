@@ -2137,11 +2137,22 @@ class GscNet():
 
     def add_noiseC(self):
 
-        noise = np.sqrt(2 * self.T * self.dt) * \
-            np.random.randn(self.num_units)
-        noiseC = np.sqrt(self.scale_constants) * \
-            self.N2C(noise)  # rescaling noise
-        self.actC += noiseC
+        if self.use_jax:
+            # JAX version: use JAX random for GPU compatibility
+            noise = jnp.sqrt(2 * self.T * self.dt) * \
+                jax.random.normal(
+                    jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
+                    shape=(self.num_units,)).astype(jnp.float32)
+            noiseC = jnp.sqrt(self.scale_constants) * \
+                self.N2C(noise)  # rescaling noise
+            self.actC += noiseC
+        else:
+            # NumPy version
+            noise = np.sqrt(2 * self.T * self.dt) * \
+                np.random.randn(self.num_units)
+            noiseC = np.sqrt(self.scale_constants) * \
+                self.N2C(noise)  # rescaling noise
+            self.actC += noiseC
 
     def update_q(self):
 
@@ -2154,8 +2165,17 @@ class GscNet():
 
     def set_random_state(self, minact=0, maxact=1):
 
-        self.actC = np.random.uniform(
-            minact, maxact, size=self.num_bindings)
+        if self.use_jax:
+            # JAX version: use JAX random for GPU compatibility
+            self.actC = jax.random.uniform(
+                jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
+                shape=(self.num_bindings,),
+                minval=minact, maxval=maxact).astype(jnp.float32)
+        else:
+            # NumPy version
+            self.actC = np.random.uniform(
+                minact, maxact, size=self.num_bindings)
+
         self.actCmat = self.vec2mat()
         self.act = self.C2N(self.actC)
 
@@ -2295,8 +2315,17 @@ class GscNet():
 
     def set_state(self, mu, sd=0.):
 
-        noise_vec = np.random.normal(
-            loc=0., scale=sd, size=self.num_bindings)
+        if self.use_jax:
+            # JAX version: use JAX random for GPU compatibility
+            noise_vec = jax.random.normal(
+                jax.random.PRNGKey(int(time.time() * 1e6) % (2**32)),
+                shape=(self.num_bindings,)) * sd
+            noise_vec = noise_vec.astype(jnp.float32)
+        else:
+            # NumPy version
+            noise_vec = np.random.normal(
+                loc=0., scale=sd, size=self.num_bindings)
+
         self.actC = mu + noise_vec
         self.actCmat = self.vec2mat()
         self.act = self.C2N()
@@ -2305,12 +2334,25 @@ class GscNet():
 
         self.params_backup = {}
         self.params_backup['encodings'] = copy.deepcopy(self.encodings)
-        self.params_backup['WC'] = self.WC.copy()
-        self.params_backup['bC'] = self.bC.copy()
-        self.params_backup['estr'] = self.estr.copy()
-        self.params_backup['ep'] = self.ep.copy()
-        if hasattr(self, 'qpolicy'):
-            self.params_backup['qpolicy'] = self.qpolicy.copy()
+
+        if self.use_jax:
+            # JAX arrays are immutable, so we can just store references
+            # Or use jnp.array() to create copies that stay on GPU
+            self.params_backup['WC'] = jnp.array(self.WC)
+            self.params_backup['bC'] = jnp.array(self.bC)
+            self.params_backup['estr'] = jnp.array(self.estr)
+            self.params_backup['ep'] = jnp.array(self.ep)
+            if hasattr(self, 'qpolicy'):
+                # qpolicy is typically NumPy even in JAX mode
+                self.params_backup['qpolicy'] = self.qpolicy.copy()
+        else:
+            # NumPy version
+            self.params_backup['WC'] = self.WC.copy()
+            self.params_backup['bC'] = self.bC.copy()
+            self.params_backup['estr'] = self.estr.copy()
+            self.params_backup['ep'] = self.ep.copy()
+            if hasattr(self, 'qpolicy'):
+                self.params_backup['qpolicy'] = self.qpolicy.copy()
 
     def generate_corpus(self, nsamples=5000,
                         min_sent_len=None, max_sent_len=None,
