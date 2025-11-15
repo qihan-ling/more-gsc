@@ -2095,7 +2095,10 @@ class GscNet():
         '''Reset the model. q and T will be set to their initial values'''
 
         self.dt = self.opts['dt_init']
-        self.q = self.opts['q_init'] * np.ones(self.num_roles)
+        if self.use_jax:
+            self.q = self.opts['q_init'] * jnp.ones(self.num_roles, dtype=jnp.float32)
+        else:
+            self.q = self.opts['q_init'] * np.ones(self.num_roles)
         self.T = self.opts['T_init']
         self.t = 0.
         self.update_scale_constants(pos=0)
@@ -2177,8 +2180,13 @@ class GscNet():
             self.q += self.opts['q_rate'] * self.q_mask * self.dt
         else:
             self.q += self.opts['q_rate'] * self.dt
-        self.q = np.maximum(
-            np.minimum(self.q, self.opts['q_max']), 0)
+
+        if self.use_jax:
+            self.q = jnp.maximum(
+                jnp.minimum(self.q, self.opts['q_max']), 0)
+        else:
+            self.q = np.maximum(
+                np.minimum(self.q, self.opts['q_max']), 0)
 
     def set_random_state(self, minact=0, maxact=1):
 
@@ -4240,7 +4248,12 @@ class GscNet():
             (self.opts['bowl_center'] - actC)
         hgrad_q0 = -2 * self.extend_rvec(rvec=q) * \
             actC * (1 - actC) * (1 - 2 * actC)
-        ssq = np.sum(actCmat ** 2, axis=0)
+
+        if self.use_jax:
+            ssq = jnp.sum(actCmat ** 2, axis=0)
+        else:
+            ssq = np.sum(actCmat ** 2, axis=0)
+
         hgrad_q1 = -4 * self.opts['m'] * actC * self.extend_rvec(rvec=ssq - 1)
         return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
  #####################################
