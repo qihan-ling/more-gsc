@@ -2239,6 +2239,10 @@ class GscNet():
 
         # Add noise
         self.add_noiseC()
+
+        # Update actCmat which is needed to compute Hq0Grad and Hq1Grad
+        self.actCmat = self.vec2mat()
+
         ########### ORIGINAL CODE BELOW ###########
         # # ToDo:
         # # (1) adaptive stepsize
