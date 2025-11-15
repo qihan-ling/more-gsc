@@ -1042,21 +1042,39 @@ class GscNet():
         dur = time.time() - t0
         print('{} s for initializing parameter values'.format(dur))
 
-        self.extC = np.zeros(self.num_bindings)
-        self.ext = self.C2N(actC=self.extC)
-        self._set_bowl_parameters()
+        if self.use_jax:
+            # JAX version: create state variables on GPU
+            self.extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+            self.ext = self.C2N(actC=self.extC)
+            self._set_bowl_parameters()
 
-        self.q = self.opts['q_init'] * np.ones(self.num_roles)
-        self.T = self.opts['T_init']
-        self.dt = self.opts['dt_init']   # NOTE: Consider using a vector
+            self.q = jnp.ones(
+                self.num_roles, dtype=jnp.float32) * self.opts['q_init']
+            self.T = self.opts['T_init']
+            self.dt = self.opts['dt_init']
 
-        # Add state variables =====================================
-        # Previously, implemented as a method _add_state_variables()
-        self.t = 0.
-        self.actC = np.zeros(self.num_bindings)
-        self.actCmat = self.vec2mat(self.actC)
-        self.act = self.C2N()
-        self.update_scale_constants(pos=0)
+            # Add state variables on GPU
+            self.t = 0.
+            self.actC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+            self.actCmat = self.vec2mat(self.actC)
+            self.act = self.C2N()
+            self.update_scale_constants(pos=0)
+        else:
+            # NumPy version: CPU arrays
+            self.extC = np.zeros(self.num_bindings)
+            self.ext = self.C2N(actC=self.extC)
+            self._set_bowl_parameters()
+
+            self.q = self.opts['q_init'] * np.ones(self.num_roles)
+            self.T = self.opts['T_init']
+            self.dt = self.opts['dt_init']
+
+            # Add state variables
+            self.t = 0.
+            self.actC = np.zeros(self.num_bindings)
+            self.actCmat = self.vec2mat(self.actC)
+            self.act = self.C2N()
+            self.update_scale_constants(pos=0)
 
         t0 = time.time()
         self.get_ep(method=self.opts['ep_method'])
@@ -1570,25 +1588,6 @@ class GscNet():
         bytes_saved = self.num_bindings ** 2 * 4
         print(
             f"  ✓ Memory saved by not creating S: {bytes_saved / 1e12:.1f} TB")
-        ######## ORIGINAL CODE BELOW################
-        # For justification of kronecker product, see:
-        # http://en.wikipedia.org/wiki/Vectorization_(mathematics)
-        N = np.kron(self.R, self.F)    # Pay attention to the argument order
-        # Column vectors of N are the neural coordinates of the conceptual basis vectors.
-        if N.shape[0] == N.shape[1]:
-            C = np.linalg.inv(N)
-        else:
-            # N may be a non-square matrix. If so, compute pseudo-inverse.
-            # CHECK if this is valid.
-            C = np.linalg.pinv(N)
-        self.N = N
-        self.C = C
-
-        self.Gc = self.C.T.dot(self.C)
-        self.C_reshaped = self.C.reshape(
-            (self.num_fillers, self.num_roles, self.num_units), order='F')
-
-        self.S = self.C.dot(self.C.T)  # inverse of similarity matrix
 
     def _build_model(self):
         # Initialize the model by setting weight and bias parameters to
@@ -2078,7 +2077,11 @@ class GscNet():
         '''Reset the model. q and T will be set to their initial values'''
 
         self.dt = self.opts['dt_init']
-        self.q = self.opts['q_init'] * np.ones(self.num_roles)
+        if self.use_jax:
+            self.q = self.opts['q_init'] * \
+                jnp.ones(self.num_roles, dtype=jnp.float32)
+        else:
+            self.q = self.opts['q_init'] * np.ones(self.num_roles)
         self.T = self.opts['T_init']
         self.t = 0.
         self.update_scale_constants(pos=0)
@@ -2137,11 +2140,22 @@ class GscNet():
 
     def add_noiseC(self):
 
-        noise = np.sqrt(2 * self.T * self.dt) * \
-            np.random.randn(self.num_units)
-        noiseC = np.sqrt(self.scale_constants) * \
-            self.N2C(noise)  # rescaling noise
-        self.actC += noiseC
+        if self.use_jax:
+            # JAX version: use JAX random for GPU compatibility
+            noise = jnp.sqrt(2 * self.T * self.dt) * \
+                jax.random.normal(
+                    jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
+                    shape=(self.num_units,)).astype(jnp.float32)
+            noiseC = jnp.sqrt(self.scale_constants) * \
+                self.N2C(noise)  # rescaling noise
+            self.actC += noiseC
+        else:
+            # NumPy version
+            noise = np.sqrt(2 * self.T * self.dt) * \
+                np.random.randn(self.num_units)
+            noiseC = np.sqrt(self.scale_constants) * \
+                self.N2C(noise)  # rescaling noise
+            self.actC += noiseC
 
     def update_q(self):
 
@@ -2149,13 +2163,25 @@ class GscNet():
             self.q += self.opts['q_rate'] * self.q_mask * self.dt
         else:
             self.q += self.opts['q_rate'] * self.dt
-        self.q = np.maximum(
-            np.minimum(self.q, self.opts['q_max']), 0)
+        if self.use_jax:
+            self.q = jnp.maximum(
+                jnp.minimum(self.q, self.opts['q_max']), 0)
+        else:
+            self.q = np.maximum(
+                np.minimum(self.q, self.opts['q_max']), 0)
 
     def set_random_state(self, minact=0, maxact=1):
 
-        self.actC = np.random.uniform(
-            minact, maxact, size=self.num_bindings)
+        if self.use_jax:
+            # JAX version: use JAX random for GPU compatibility
+            self.actC = jax.random.uniform(
+                jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
+                shape=(self.num_bindings,),
+                minval=minact, maxval=maxact).astype(jnp.float32)
+        else:
+            # NumPy version
+            self.actC = np.random.uniform(
+                minact, maxact, size=self.num_bindings)
         self.actCmat = self.vec2mat()
         self.act = self.C2N(self.actC)
 
@@ -2166,7 +2192,6 @@ class GscNet():
         KEY OPTIMIZATION: Instead of S @ v, compute C @ (C.T @ v)
         This avoids materializing the 18 TB S matrix!
         """
-
         # Compute gradient in conceptual space
         hgrad = self.HGradC()
 
@@ -2182,16 +2207,19 @@ class GscNet():
             gradC = _lazy_s_multiply(
                 self.C, self.C_T, hgrad, self.scale_constants
             )
+            self.t += self.dt
             self.actC = self.actC + self.dt * gradC
         else:
             # NumPy version: on CPU
             temp = self.C_T.dot(hgrad)
             gradC = self.C.dot(temp)
             gradC = self.scale_constants * gradC
+            self.t += self.dt
             self.actC = self.actC + self.dt * gradC
 
         # Add noise
         self.add_noiseC()
+        self.actCmat = self.vec2mat()
         ########### ORIGINAL CODE BELOW ###########
         # # ToDo:
         # # (1) adaptive stepsize
@@ -2220,10 +2248,18 @@ class GscNet():
         must be updated after setting the weight and bias values.'''
 
         if isinstance(self.opts['bowl_center'], numbers.Number):
-            self.bowl_center = (self.opts['bowl_center'] *
-                                np.ones(self.num_bindings))
+            if self.use_jax:
+                self.bowl_center = (self.opts['bowl_center'] *
+                                    jnp.ones(self.num_bindings, dtype=jnp.float32))
+            else:
+                self.bowl_center = (self.opts['bowl_center'] *
+                                    np.ones(self.num_bindings))
         else:
-            self.bowl_center = self.opts['bowl_center']
+            if self.use_jax:
+                self.bowl_center = jnp.array(
+                    self.opts['bowl_center'], dtype=jnp.float32)
+            else:
+                self.bowl_center = self.opts['bowl_center']
 
         if self.opts['bowl_strength'] is None:
             self.opts['bowl_strength'] = (
@@ -2283,20 +2319,44 @@ class GscNet():
                                 weights[idx] = np.exp(-(pos0 - pos) * c)
 
             if q_only:
-                self.scale_constants = np.ones(self.num_bindings)
-                self.scale_constants_q = weights
+                if self.use_jax:
+                    self.scale_constants = jnp.ones(
+                        self.num_bindings, dtype=jnp.float32)
+                    self.scale_constants_q = jnp.array(
+                        weights, dtype=jnp.float32)
+                else:
+                    self.scale_constants = np.ones(self.num_bindings)
+                    self.scale_constants_q = weights
             else:
-                self.scale_constants = weights
-                self.scale_constants_q = np.ones(self.num_bindings)
+                if self.use_jax:
+                    self.scale_constants = jnp.array(
+                        weights, dtype=jnp.float32)
+                    self.scale_constants_q = jnp.ones(
+                        self.num_bindings, dtype=jnp.float32)
+                else:
+                    self.scale_constants = weights
+                    self.scale_constants_q = np.ones(self.num_bindings)
 
         else:
             # Not yet implemneted
-            self.scale_constants = np.ones(self.num_bindings)
+            if self.use_jax:
+                self.scale_constants = jnp.ones(
+                    self.num_bindings, dtype=jnp.float32)
+            else:
+                self.scale_constants = np.ones(self.num_bindings)
 
     def set_state(self, mu, sd=0.):
 
-        noise_vec = np.random.normal(
-            loc=0., scale=sd, size=self.num_bindings)
+        if self.use_jax:
+            # JAX version: use JAX random for GPU compatibility
+            noise_vec = jax.random.normal(
+                jax.random.PRNGKey(int(time.time() * 1e6) % (2**32)),
+                shape=(self.num_bindings,)) * sd
+            noise_vec = noise_vec.astype(jnp.float32)
+        else:
+            # NumPy version
+            noise_vec = np.random.normal(
+                loc=0., scale=sd, size=self.num_bindings)
         self.actC = mu + noise_vec
         self.actCmat = self.vec2mat()
         self.act = self.C2N()
@@ -2305,12 +2365,24 @@ class GscNet():
 
         self.params_backup = {}
         self.params_backup['encodings'] = copy.deepcopy(self.encodings)
-        self.params_backup['WC'] = self.WC.copy()
-        self.params_backup['bC'] = self.bC.copy()
-        self.params_backup['estr'] = self.estr.copy()
-        self.params_backup['ep'] = self.ep.copy()
-        if hasattr(self, 'qpolicy'):
-            self.params_backup['qpolicy'] = self.qpolicy.copy()
+        if self.use_jax:
+            # JAX arrays are immutable, so we can just store references
+            # Or use jnp.array() to create copies that stay on GPU
+            self.params_backup['WC'] = jnp.array(self.WC)
+            self.params_backup['bC'] = jnp.array(self.bC)
+            self.params_backup['estr'] = jnp.array(self.estr)
+            self.params_backup['ep'] = jnp.array(self.ep)
+            if hasattr(self, 'qpolicy'):
+                # qpolicy is typically NumPy even in JAX mode
+                self.params_backup['qpolicy'] = self.qpolicy.copy()
+        else:
+            # NumPy version
+            self.params_backup['WC'] = self.WC.copy()
+            self.params_backup['bC'] = self.bC.copy()
+            self.params_backup['estr'] = self.estr.copy()
+            self.params_backup['ep'] = self.ep.copy()
+            if hasattr(self, 'qpolicy'):
+                self.params_backup['qpolicy'] = self.qpolicy.copy()
 
     def generate_corpus(self, nsamples=5000,
                         min_sent_len=None, max_sent_len=None,
@@ -3459,7 +3531,10 @@ class GscNet():
 
     def clear_input(self):
 
-        self.extC = np.zeros(self.num_bindings)
+        if self.use_jax:
+            self.extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+        else:
+            self.extC = np.zeros(self.num_bindings)
         self.ext = self.C2N(self.extC)
 
     def set_input(self, binding_names,  # ext_vals=1.,
@@ -4160,7 +4235,10 @@ class GscNet():
             (self.opts['bowl_center'] - actC)
         hgrad_q0 = -2 * self.extend_rvec(rvec=q) * \
             actC * (1 - actC) * (1 - 2 * actC)
-        ssq = np.sum(actCmat ** 2, axis=0)
+        if self.use_jax:
+            ssq = jnp.sum(actCmat ** 2, axis=0)
+        else:
+            ssq = np.sum(actCmat ** 2, axis=0)
         hgrad_q1 = -4 * self.opts['m'] * actC * self.extend_rvec(rvec=ssq - 1)
         return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
  #####################################
