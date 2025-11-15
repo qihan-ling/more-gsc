@@ -3729,7 +3729,7 @@ class GscNet():
                             val = max(val, 0.)
 
                         state = np.zeros(self.num_bindings)
-                        state[list(key)] = 1.
+                        state[np.array(list(key), dtype=np.int32)] = 1.
                         # dbC += state * self.train_opts['mask0'] * val * self.train_opts['coef']['trees']
                         dbC += state * val * self.train_opts['coef']['trees']
 
@@ -3739,6 +3739,8 @@ class GscNet():
                                     key) if ii in idx_terminal]
                             else:
                                 idx_tb = list(key)
+                            # Convert to array for JAX compatibility
+                            idx_tb = np.array(idx_tb, dtype=np.int32)
                             destr[idx_tb] += extC_token[idx_tb] * \
                                 val * \
                                 self.train_opts['coef']['trees']  # * actC[idx_tb]
@@ -3747,7 +3749,7 @@ class GscNet():
                 for key, val in err['treelets'].items():
 
                     if key in keys_treelet:  # pwc: new
-                        key = list(key)
+                        key = np.array(list(key), dtype=np.int32)
                         dbC[key[0]] += val * \
                             self.train_opts['coef']['treelets']
 
@@ -3776,7 +3778,7 @@ class GscNet():
 
             if self.train_opts['coef']['binding_pairs'] > 0.:
                 for key, val in err['binding_pairs'].items():
-                    key = list(key)
+                    key = np.array(list(key), dtype=np.int32)
                     dbC[key[0]] += val * \
                         self.train_opts['coef']['binding_pairs']
                     dbC[key[1]] += val * \
@@ -3820,7 +3822,7 @@ class GscNet():
                             val = max(val, 0.)
 
                         state = np.zeros(self.num_bindings)
-                        state[list(key)] = 1.
+                        state[np.array(list(key), dtype=np.int32)] = 1.
                         dWC += np.outer(state, state) * \
                             self.train_opts['mask0'] * val * \
                             self.train_opts['coef']['trees']
@@ -3831,6 +3833,8 @@ class GscNet():
                                     key) if ii in idx_terminal]
                             else:
                                 idx_tb = list(key)
+                            # Convert to array for JAX compatibility
+                            idx_tb = np.array(idx_tb, dtype=np.int32)
                             destr[idx_tb] += extC_token[idx_tb] * \
                                 val * \
                                 self.train_opts['coef']['trees']  # * actC[idx_tb]
@@ -3839,7 +3843,7 @@ class GscNet():
                 for key, val in err['treelets'].items():
 
                     if key in keys_treelet:  # pwc: new
-                        key = list(key)
+                        key = np.array(list(key), dtype=np.int32)
 
                         if not self.train_opts['bias_only']:
                             dWC[key[0], key[1]] += val * \
