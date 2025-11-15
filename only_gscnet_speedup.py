@@ -2227,12 +2227,14 @@ class GscNet():
             gradC = _lazy_s_multiply(
                 self.C, self.C_T, hgrad, self.scale_constants
             )
+            self.t += self.dt  # CRITICAL: update time
             self.actC = self.actC + self.dt * gradC
         else:
             # NumPy version: on CPU
             temp = self.C_T.dot(hgrad)
             gradC = self.C.dot(temp)
             gradC = self.scale_constants * gradC
+            self.t += self.dt  # CRITICAL: update time
             self.actC = self.actC + self.dt * gradC
 
         # Add noise
