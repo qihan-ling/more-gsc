@@ -939,8 +939,9 @@ if JAX_AVAILABLE:
             'T_init': net.opts['T_init'],
             'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
             # Critical parameters for correct gradient computation
-            'S': jnp.array(net.S),  # Inverse similarity matrix
+            # 'S': jnp.array(net.S),  # Inverse similarity matrix
             'C': jnp.array(net.C),
+            'C_T': jnp.array(net.C_T),
             'bowl_strength': net.opts.get('bowl_strength', 0.0),
             'bowl_center': net.opts.get('bowl_center', 0.5),
             'm': net.opts.get('m', 1.0),  # Role-filling constraint strength
@@ -978,6 +979,7 @@ class GscNet():
         self._update_opts(opts=opts)
         self._add_names()
         self._generate_encodings()
+        self.use_jax = JAX_AVAILABLE and self.opts.get('use_jax', True)
         self._add_change_of_basis_matrices()
         dur = time.time() - t0
         print('{} s for generating encodings'.format(dur))
@@ -987,7 +989,6 @@ class GscNet():
             # self._precompute_fast_lookups()
             self._precompute_fastER_lookups()
         # Add parameters ==========================================
-        self.use_jax = JAX_AVAILABLE and self.opts.get('use_jax', True)
         if self.use_jax:
             print("Initializing parameters on GPU with JAX...")
             # Use float32 for GPU efficiency (good balance of speed/precision)
@@ -1048,7 +1049,8 @@ class GscNet():
             self.ext = self.C2N(actC=self.extC)
             self._set_bowl_parameters()
 
-            self.q = jnp.ones(self.num_roles, dtype=jnp.float32) * self.opts['q_init']
+            self.q = jnp.ones(
+                self.num_roles, dtype=jnp.float32) * self.opts['q_init']
             self.T = self.opts['T_init']
             self.dt = self.opts['dt_init']
 
@@ -1587,25 +1589,6 @@ class GscNet():
         bytes_saved = self.num_bindings ** 2 * 4
         print(
             f"  ✓ Memory saved by not creating S: {bytes_saved / 1e12:.1f} TB")
-        ######## ORIGINAL CODE BELOW################
-        # For justification of kronecker product, see:
-        # http://en.wikipedia.org/wiki/Vectorization_(mathematics)
-        N = np.kron(self.R, self.F)    # Pay attention to the argument order
-        # Column vectors of N are the neural coordinates of the conceptual basis vectors.
-        if N.shape[0] == N.shape[1]:
-            C = np.linalg.inv(N)
-        else:
-            # N may be a non-square matrix. If so, compute pseudo-inverse.
-            # CHECK if this is valid.
-            C = np.linalg.pinv(N)
-        self.N = N
-        self.C = C
-
-        self.Gc = self.C.T.dot(self.C)
-        self.C_reshaped = self.C.reshape(
-            (self.num_fillers, self.num_roles, self.num_units), order='F')
-
-        self.S = self.C.dot(self.C.T)  # inverse of similarity matrix
 
     def _build_model(self):
         # Initialize the model by setting weight and bias parameters to
@@ -2096,7 +2079,8 @@ class GscNet():
 
         self.dt = self.opts['dt_init']
         if self.use_jax:
-            self.q = self.opts['q_init'] * jnp.ones(self.num_roles, dtype=jnp.float32)
+            self.q = self.opts['q_init'] * \
+                jnp.ones(self.num_roles, dtype=jnp.float32)
         else:
             self.q = self.opts['q_init'] * np.ones(self.num_roles)
         self.T = self.opts['T_init']
@@ -2180,7 +2164,6 @@ class GscNet():
             self.q += self.opts['q_rate'] * self.q_mask * self.dt
         else:
             self.q += self.opts['q_rate'] * self.dt
-
         if self.use_jax:
             self.q = jnp.maximum(
                 jnp.minimum(self.q, self.opts['q_max']), 0)
@@ -2200,7 +2183,6 @@ class GscNet():
             # NumPy version
             self.actC = np.random.uniform(
                 minact, maxact, size=self.num_bindings)
-
         self.actCmat = self.vec2mat()
         self.act = self.C2N(self.actC)
 
@@ -2211,7 +2193,6 @@ class GscNet():
         KEY OPTIMIZATION: Instead of S @ v, compute C @ (C.T @ v)
         This avoids materializing the 18 TB S matrix!
         """
-
         # Compute gradient in conceptual space
         hgrad = self.HGradC()
 
@@ -2227,22 +2208,19 @@ class GscNet():
             gradC = _lazy_s_multiply(
                 self.C, self.C_T, hgrad, self.scale_constants
             )
-            self.t += self.dt  # CRITICAL: update time
+            self.t += self.dt
             self.actC = self.actC + self.dt * gradC
         else:
             # NumPy version: on CPU
             temp = self.C_T.dot(hgrad)
             gradC = self.C.dot(temp)
             gradC = self.scale_constants * gradC
-            self.t += self.dt  # CRITICAL: update time
+            self.t += self.dt
             self.actC = self.actC + self.dt * gradC
 
         # Add noise
         self.add_noiseC()
-
-        # Update actCmat which is needed to compute Hq0Grad and Hq1Grad
         self.actCmat = self.vec2mat()
-
         ########### ORIGINAL CODE BELOW ###########
         # # ToDo:
         # # (1) adaptive stepsize
@@ -2279,7 +2257,8 @@ class GscNet():
                                     np.ones(self.num_bindings))
         else:
             if self.use_jax:
-                self.bowl_center = jnp.array(self.opts['bowl_center'], dtype=jnp.float32)
+                self.bowl_center = jnp.array(
+                    self.opts['bowl_center'], dtype=jnp.float32)
             else:
                 self.bowl_center = self.opts['bowl_center']
 
@@ -2342,15 +2321,19 @@ class GscNet():
 
             if q_only:
                 if self.use_jax:
-                    self.scale_constants = jnp.ones(self.num_bindings, dtype=jnp.float32)
-                    self.scale_constants_q = jnp.array(weights, dtype=jnp.float32)
+                    self.scale_constants = jnp.ones(
+                        self.num_bindings, dtype=jnp.float32)
+                    self.scale_constants_q = jnp.array(
+                        weights, dtype=jnp.float32)
                 else:
                     self.scale_constants = np.ones(self.num_bindings)
                     self.scale_constants_q = weights
             else:
                 if self.use_jax:
-                    self.scale_constants = jnp.array(weights, dtype=jnp.float32)
-                    self.scale_constants_q = jnp.ones(self.num_bindings, dtype=jnp.float32)
+                    self.scale_constants = jnp.array(
+                        weights, dtype=jnp.float32)
+                    self.scale_constants_q = jnp.ones(
+                        self.num_bindings, dtype=jnp.float32)
                 else:
                     self.scale_constants = weights
                     self.scale_constants_q = np.ones(self.num_bindings)
@@ -2358,7 +2341,8 @@ class GscNet():
         else:
             # Not yet implemneted
             if self.use_jax:
-                self.scale_constants = jnp.ones(self.num_bindings, dtype=jnp.float32)
+                self.scale_constants = jnp.ones(
+                    self.num_bindings, dtype=jnp.float32)
             else:
                 self.scale_constants = np.ones(self.num_bindings)
 
@@ -2374,7 +2358,6 @@ class GscNet():
             # NumPy version
             noise_vec = np.random.normal(
                 loc=0., scale=sd, size=self.num_bindings)
-
         self.actC = mu + noise_vec
         self.actCmat = self.vec2mat()
         self.act = self.C2N()
@@ -2383,7 +2366,6 @@ class GscNet():
 
         self.params_backup = {}
         self.params_backup['encodings'] = copy.deepcopy(self.encodings)
-
         if self.use_jax:
             # JAX arrays are immutable, so we can just store references
             # Or use jnp.array() to create copies that stay on GPU
@@ -4254,12 +4236,10 @@ class GscNet():
             (self.opts['bowl_center'] - actC)
         hgrad_q0 = -2 * self.extend_rvec(rvec=q) * \
             actC * (1 - actC) * (1 - 2 * actC)
-
         if self.use_jax:
             ssq = jnp.sum(actCmat ** 2, axis=0)
         else:
             ssq = np.sum(actCmat ** 2, axis=0)
-
         hgrad_q1 = -4 * self.opts['m'] * actC * self.extend_rvec(rvec=ssq - 1)
         return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
  #####################################
