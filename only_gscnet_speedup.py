@@ -939,8 +939,9 @@ if JAX_AVAILABLE:
             'T_init': net.opts['T_init'],
             'qpolicy': jnp.array(net.qpolicy) if hasattr(net, 'qpolicy') else None,
             # Critical parameters for correct gradient computation
-            'S': jnp.array(net.S),  # Inverse similarity matrix
+            # 'S': jnp.array(net.S),  # Inverse similarity matrix
             'C': jnp.array(net.C),
+            'C_T': jnp.array(net.C_T),
             'bowl_strength': net.opts.get('bowl_strength', 0.0),
             'bowl_center': net.opts.get('bowl_center', 0.5),
             'm': net.opts.get('m', 1.0),  # Role-filling constraint strength
