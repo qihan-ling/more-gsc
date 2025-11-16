@@ -998,6 +998,9 @@ class GscNet():
             self.estr = jnp.ones(
                 self.num_bindings, dtype=jnp.float32) * self.opts['init_estr']
 
+            # Initialize JAX random key for efficient random number generation
+            self.rng_key = jax.random.PRNGKey(seed if seed is not None else 0)
+
             # Initialize Adam states on GPU
             self.optim = {
                 'M_WC': jnp.zeros_like(self.WC),
@@ -2142,11 +2145,10 @@ class GscNet():
     def add_noiseC(self):
 
         if self.use_jax:
-            # JAX version: use JAX random for GPU compatibility
+            # JAX version: use JAX random with proper key splitting
+            self.rng_key, subkey = jax.random.split(self.rng_key)
             noise = jnp.sqrt(2 * self.T * self.dt) * \
-                jax.random.normal(
-                    jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
-                    shape=(self.num_units,)).astype(jnp.float32)
+                jax.random.normal(subkey, shape=(self.num_units,), dtype=jnp.float32)
             noiseC = jnp.sqrt(self.scale_constants) * \
                 self.N2C(noise)  # rescaling noise
             self.actC += noiseC
@@ -2174,11 +2176,11 @@ class GscNet():
     def set_random_state(self, minact=0, maxact=1):
 
         if self.use_jax:
-            # JAX version: use JAX random for GPU compatibility
+            # JAX version: use JAX random with proper key splitting
+            self.rng_key, subkey = jax.random.split(self.rng_key)
             self.actC = jax.random.uniform(
-                jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
-                shape=(self.num_bindings,),
-                minval=minact, maxval=maxact).astype(jnp.float32)
+                subkey, shape=(self.num_bindings,),
+                minval=minact, maxval=maxact, dtype=jnp.float32)
         else:
             # NumPy version
             self.actC = np.random.uniform(
@@ -2349,11 +2351,10 @@ class GscNet():
     def set_state(self, mu, sd=0.):
 
         if self.use_jax:
-            # JAX version: use JAX random for GPU compatibility
+            # JAX version: use JAX random with proper key splitting
+            self.rng_key, subkey = jax.random.split(self.rng_key)
             noise_vec = jax.random.normal(
-                jax.random.PRNGKey(int(time.time() * 1e6) % (2**32)),
-                shape=(self.num_bindings,)) * sd
-            noise_vec = noise_vec.astype(jnp.float32)
+                subkey, shape=(self.num_bindings,), dtype=jnp.float32) * sd
         else:
             # NumPy version
             noise_vec = np.random.normal(
