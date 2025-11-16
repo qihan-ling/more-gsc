@@ -791,7 +791,8 @@ if JAX_AVAILABLE:
             # Extract parameters
             WC = net_params['WC']
             bC = net_params['bC']
-            S = net_params['S']
+            # S = net_params['S'] avoid storing S, using C_T to do lazy multiplication
+            C_T = net_params['C_T']
             C = net_params['C']
             bowl_strength = float(net_params['bowl_strength'])
             bowl_center = float(net_params['bowl_center'])
@@ -827,7 +828,10 @@ if JAX_AVAILABLE:
             # CRITICAL: Apply S matrix and scale_constants
             # ===================================================================
             # This matches the original: gradC = scale_constants * S.dot(HGradC())
-            gradC = scale_const * (S @ HGradC_val)
+            # OLD (creates 18 TB S matrix): gradC = scale_const * (S @ HGradC_val)
+            # NEW (lazy): gradC = scale_const * C @ (C.T @ HGradC_val)
+            temp = C_T @ HGradC_val
+            gradC = scale_const * (C @ temp)
 
             # Euler integration
             actC = actC + dt * gradC
