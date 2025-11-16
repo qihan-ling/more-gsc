@@ -616,6 +616,47 @@ if JAX_AVAILABLE:
         result = jnp.dot(C, temp)
         return scale_constants * result
 
+    @jit
+    def _dynamics_step_jax(actC, WC, bC, extC, bowl_center, bowl_strength,
+                           scale_constants, C, C_T, N, num_fillers, dt, T,
+                           q, q_max, q_rate, m, rng_key):
+        """
+        Single dynamics step for equilibrium finding.
+        JIT-compiled for GPU acceleration.
+        """
+        # Compute gradient (HGradC logic)
+        # Grammar term
+        hgrad_g = jnp.dot(WC, actC) + bC + extC
+        # Bowl term
+        hgrad_b = bowl_strength * (bowl_center - actC)
+        # Commitment term
+        hgrad_q0 = -2 * jnp.repeat(q, num_fillers) * actC * (1 - actC) * (1 - 2*actC)
+        # Uniqueness term
+        actCmat = actC.reshape((num_fillers, -1), order='F')
+        ssq = jnp.sum(actCmat ** 2, axis=0)
+        hgrad_q1 = -4 * m * actC * jnp.repeat(ssq - 1, num_fillers)
+
+        hgrad = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
+
+        # Project through similarity: gradC = C @ (C.T @ hgrad)
+        gradC = _lazy_s_multiply(C, C_T, hgrad, scale_constants)
+
+        # Euler integration
+        actC_new = actC + dt * gradC
+
+        # Add noise
+        rng_key, subkey = jax.random.split(rng_key)
+        num_units = N.shape[1]
+        noise = jnp.sqrt(2 * T * dt) * jax.random.normal(subkey, shape=(num_units,), dtype=jnp.float32)
+        noiseC = jnp.sqrt(scale_constants) * jnp.dot(C, noise)
+        actC_new = actC_new + noiseC
+
+        # Update q
+        q_new = q + q_rate * dt
+        q_new = jnp.maximum(jnp.minimum(q_new, q_max), 0)
+
+        return actC_new, q_new, rng_key
+
     def _build_filler_type_map(net):
         """
         Precompute mapping from filler base types to all matching fillers.
@@ -2052,24 +2093,51 @@ class GscNet():
         if log_trace:
             self.initialize_traces(trace_list)
 
-        while self.t < t_max:
-            self.update_stateC()
+        # For JAX: use JIT-compiled loop for maximum speed
+        if self.use_jax and not log_trace and tol is None and not update_T:
+            # Pure JAX fast path: JIT-compiled dynamics loop
+            num_steps = int(duration / self.dt)
 
-            if update_T and (self.opts['T_decay_rate'] > 0):
-                self.update_T()
-            if update_q:
-                self.update_q()
-            if log_trace:
-                self.update_traces()
+            def body_fun(i, carry):
+                actC, q, rng_key = carry
+                actC_new, q_new, rng_key_new = _dynamics_step_jax(
+                    actC, self.WC, self.bC, self.extC, self.bowl_center,
+                    self.opts['bowl_strength'], self.scale_constants,
+                    self.C, self.C_T, self.N, self.num_fillers,
+                    self.dt, self.T, q, self.opts['q_max'],
+                    self.opts['q_rate'] if update_q else 0.0,
+                    self.opts['m'], rng_key
+                )
+                return (actC_new, q_new, rng_key_new)
 
-            if self.check_divergence():
-                # if dt is too big, the model may diverge.
-                break
+            # Run JIT-compiled loop
+            init_carry = (self.actC, self.q, self.rng_key)
+            final_carry = jax.lax.fori_loop(0, num_steps, body_fun, init_carry)
+            self.actC, self.q, self.rng_key = final_carry
 
-            if tol is not None:
-                self.check_convergence(tol=tol)
-                if self.converged:
+            # Update derived quantities
+            self.actCmat = self.vec2mat()
+            self.t += num_steps * self.dt
+        else:
+            # Original path: for CPU or when tracing/convergence checking needed
+            while self.t < t_max:
+                self.update_stateC()
+
+                if update_T and (self.opts['T_decay_rate'] > 0):
+                    self.update_T()
+                if update_q:
+                    self.update_q()
+                if log_trace:
+                    self.update_traces()
+
+                if self.check_divergence():
+                    # if dt is too big, the model may diverge.
                     break
+
+                if tol is not None:
+                    self.check_convergence(tol=tol)
+                    if self.converged:
+                        break
 
         self.act = self.C2N()
 
@@ -2137,6 +2205,11 @@ class GscNet():
             # if plot:
             #     self.plot_trace('actC')
             self.ep = self.actC.copy()
+
+            # For JAX: ensure operations complete before timing
+            if self.use_jax:
+                self.ep.block_until_ready()
+
             self.opts['T_init'] = T_init_backup
             self.opts['q_rate'] = q_rate_backup
 
