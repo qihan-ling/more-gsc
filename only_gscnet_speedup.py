@@ -2030,7 +2030,10 @@ class GscNet():
         return self.C.dot(act)
 
     def check_divergence(self, tol=2.):
-        return max(self.actC) > tol
+        if self.use_jax:
+            return jnp.max(self.actC) > tol
+        else:
+            return max(self.actC) > tol
 
     def runC(self,
              duration,
@@ -2127,7 +2130,8 @@ class GscNet():
             self.reset()
             self.set_state(mu=actC, sd=0.)
             if self.opts['use_runC']:
-                self.runC(dur)
+                # Disable tracing for speed during equilibrium finding
+                self.runC(dur, log_trace=False)
             else:
                 self.run(dur)
             # if plot:
