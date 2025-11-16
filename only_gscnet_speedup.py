@@ -2972,11 +2972,18 @@ class GscNet():
 
             # mask = net.params_backup['WC'].astype(bool).astype(float)
             mask = np.ones(self.WC.shape)
-            dWC = np.zeros(self.WC.shape)
-            dbC = np.zeros(self.bC.shape)
-            # FOR NOW: use same commitment strength for all roles
-            dqpolicy = np.zeros(self.qpolicy.shape)
-            destr = np.zeros(self.estr.shape)
+
+            # Initialize gradients with correct array type
+            if self.use_jax:
+                dWC = jnp.zeros(self.WC.shape, dtype=jnp.float32)
+                dbC = jnp.zeros(self.bC.shape, dtype=jnp.float32)
+                destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
+                dqpolicy = jnp.zeros(self.qpolicy.shape, dtype=jnp.float32)
+            else:
+                dWC = np.zeros(self.WC.shape)
+                dbC = np.zeros(self.bC.shape)
+                destr = np.zeros(self.estr.shape)
+                dqpolicy = np.zeros(self.qpolicy.shape)
             xent = {}
             xent['trees'] = 0.
             xent['treelets'] = 0.
@@ -3031,7 +3038,12 @@ class GscNet():
                         # currently, one word at a time
                         prefix_bnames = prefix_bnames[-1]
                         self.set_input(prefix_bnames)
-                    extC_token = self.extC.astype(bool).astype(int)
+
+                    # Efficient boolean→int conversion for JAX
+                    if self.use_jax:
+                        extC_token = (self.extC != 0).astype(jnp.int32)
+                    else:
+                        extC_token = self.extC.astype(bool).astype(int)
 
                     kl_curr, xent_curr, err, err_log = self.cost(
                         stat_P, stat_Q_new)
@@ -3114,15 +3126,24 @@ class GscNet():
                     role_idx_list = np.random.choice(
                         self.num_roles, self.num_treelets_update, replace=False)
 
-                maskbC_update = np.zeros(self.num_bindings)
+                if self.use_jax:
+                    maskbC_update = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+                    maskWC_update = jnp.zeros(
+                        (self.num_bindings, self.num_bindings), dtype=jnp.float32)
+                else:
+                    maskbC_update = np.zeros(self.num_bindings)
+                    maskWC_update = np.zeros(
+                        (self.num_bindings, self.num_bindings))
+
                 # rnames = [self.role_names[rid] for rid in role_idx_list]
                 # idx = self.find_roles(rnames)
-                idx = np.concatenate([self.role_to_binding_indices[rid]]
-                                     for rid in role_idx_list)
-                maskbC_update[idx] = 1.
+                idx = np.concatenate([self.role_to_binding_indices[rid]
+                                      for rid in role_idx_list])
 
-                maskWC_update = np.zeros(
-                    (self.num_bindings, self.num_bindings))
+                if self.use_jax:
+                    maskbC_update = maskbC_update.at[idx].set(1.0)
+                else:
+                    maskbC_update[idx] = 1.
                 treelet_list = []
                 for rid in role_idx_list:
                     #     r_daughters = self.hg.roles.get_daughters(
@@ -3140,10 +3161,20 @@ class GscNet():
                         idx = np.concatenate([idx_self, idx_l, idx_r])
                     else:
                         idx = self.role_to_binding_indices[rid]
-                    maskWC_update[np.ix_(idx, idx)] = 1.
+
+                    if self.use_jax:
+                        # For JAX: use .at indexing
+                        idx_i, idx_j = np.meshgrid(idx, idx, indexing='ij')
+                        maskWC_update = maskWC_update.at[idx_i.flatten(), idx_j.flatten()].set(1.0)
+                    else:
+                        maskWC_update[np.ix_(idx, idx)] = 1.
             else:
-                maskWC_update = np.ones((self.num_bindings, self.num_bindings))
-                maskbC_update = np.ones(self.num_bindings)
+                if self.use_jax:
+                    maskWC_update = jnp.ones((self.num_bindings, self.num_bindings), dtype=jnp.float32)
+                    maskbC_update = jnp.ones(self.num_bindings, dtype=jnp.float32)
+                else:
+                    maskWC_update = np.ones((self.num_bindings, self.num_bindings))
+                    maskbC_update = np.ones(self.num_bindings)
 
             if self.train_opts['update_w']:
                 # print('epoch num=', epi, destr)
@@ -3164,12 +3195,9 @@ class GscNet():
                 if not (('bias2_only' in self.train_opts) and self.train_opts['bias2_only']):
                     if self.train_opts['optimizer'] == 'adam':
                         if self.use_jax:
-                            # Ensure gradients are JAX arrays
-                            if not isinstance(dWC, jnp.ndarray):
-                                dWC = jnp.array(dWC)
-                            if not isinstance(maskWC_update, jnp.ndarray):
-                                maskWC_update = jnp.array(
-                                    maskWC_update) if maskWC_update is not None else None
+                            # Convert weight_decay to JAX if needed
+                            if not isinstance(weight_decay, jnp.ndarray):
+                                weight_decay = jnp.array(weight_decay, dtype=jnp.float32)
 
                             # JAX Adam update (JIT-compiled, all on GPU)
                             self.WC, self.optim['M_WC'], self.optim['R_WC'], self.optim['step_WC'] = \
@@ -3214,12 +3242,7 @@ class GscNet():
                 if not self.opts['use_second_order_bias']:
                     if self.train_opts['optimizer'] == 'adam':
                         if self.use_jax:
-                            if not isinstance(dbC, jnp.ndarray):
-                                dbC = jnp.array(dbC)
-                            if not isinstance(maskbC_update, jnp.ndarray):
-                                maskbC_update = jnp.array(
-                                    maskbC_update) if maskbC_update is not None else None
-
+                            # Gradients and masks are already JAX arrays
                             self.bC, self.optim['M_bC'], self.optim['R_bC'], self.optim['step_bC'] = \
                                 _adam_update_jax(
                                     self.bC, dbC, self.optim['M_bC'], self.optim['R_bC'],
