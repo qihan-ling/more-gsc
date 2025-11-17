@@ -1054,8 +1054,8 @@ class GscNet():
                 'R_WC': jnp.zeros_like(self.WC),
                 'M_bC': jnp.zeros_like(self.bC),
                 'R_bC': jnp.zeros_like(self.bC),
-                'step_WC': jnp.array(0, dtype=jnp.int32),
-                'step_bC': jnp.array(0, dtype=jnp.int32),
+                'step_WC': jnp.array(0.0, dtype=jnp.float32),
+                'step_bC': jnp.array(0.0, dtype=jnp.float32),
                 'beta1': 0.9,
                 'beta2': 0.999,
                 'eps': 1e-8
@@ -3157,8 +3157,8 @@ class GscNet():
                     else:
                         idx = self.role_to_binding_indices[rid]
                     if self.use_jax:
-                        # For JAX: use .at indexing
-                        idx_i, idx_j = np.meshgrid(idx, idx, indexing='ij')
+                        # For JAX: use .at indexing with JAX meshgrid
+                        idx_i, idx_j = jnp.meshgrid(idx, idx, indexing='ij')
                         maskWC_update = maskWC_update.at[idx_i.flatten(
                         ), idx_j.flatten()].set(1.0)
                     else:
