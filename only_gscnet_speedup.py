@@ -616,7 +616,7 @@ if JAX_AVAILABLE:
         result = jnp.dot(C, temp)
         return scale_constants * result
 
-    @jit
+    @partial(jit, static_argnums=(10,))
     def _dynamics_step_jax(actC, WC, bC, extC, bowl_center, bowl_strength,
                            scale_constants, C, C_T, N, num_fillers, dt, T,
                            q, q_max, q_rate, m, rng_key):
