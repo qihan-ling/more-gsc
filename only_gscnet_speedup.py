@@ -616,6 +616,49 @@ if JAX_AVAILABLE:
         result = jnp.dot(C, temp)
         return scale_constants * result
 
+    @jit
+    def _dynamics_step_jax(actC, WC, bC, extC, bowl_center, bowl_strength,
+                           scale_constants, C, C_T, N, num_fillers, dt, T,
+                           q, q_max, q_rate, m, rng_key):
+        """
+        Single dynamics step for equilibrium finding.
+        JIT-compiled for GPU acceleration.
+        """
+        # Compute gradient (HGradC logic)
+        # Grammar term
+        hgrad_g = jnp.dot(WC, actC) + bC + extC
+        # Bowl term
+        hgrad_b = bowl_strength * (bowl_center - actC)
+        # Commitment term
+        hgrad_q0 = -2 * jnp.repeat(q, num_fillers) * \
+            actC * (1 - actC) * (1 - 2*actC)
+        # Uniqueness term
+        actCmat = actC.reshape((num_fillers, -1), order='F')
+        ssq = jnp.sum(actCmat ** 2, axis=0)
+        hgrad_q1 = -4 * m * actC * jnp.repeat(ssq - 1, num_fillers)
+
+        hgrad = hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1
+
+        # Project through similarity: gradC = C @ (C.T @ hgrad)
+        gradC = _lazy_s_multiply(C, C_T, hgrad, scale_constants)
+
+        # Euler integration
+        actC_new = actC + dt * gradC
+
+        # Add noise
+        rng_key, subkey = jax.random.split(rng_key)
+        num_units = N.shape[1]
+        noise = jnp.sqrt(2 * T * dt) * jax.random.normal(subkey,
+                                                         shape=(num_units,), dtype=jnp.float32)
+        noiseC = jnp.sqrt(scale_constants) * jnp.dot(C, noise)
+        actC_new = actC_new + noiseC
+
+        # Update q
+        q_new = q + q_rate * dt
+        q_new = jnp.maximum(jnp.minimum(q_new, q_max), 0)
+
+        return actC_new, q_new, rng_key
+
     def _build_filler_type_map(net):
         """
         Precompute mapping from filler base types to all matching fillers.
@@ -1001,6 +1044,9 @@ class GscNet():
             self.bC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
             self.estr = jnp.ones(
                 self.num_bindings, dtype=jnp.float32) * self.opts['init_estr']
+
+            # Initialize JAX random key for efficient random number generation
+            self.rng_key = jax.random.PRNGKey(seed if seed is not None else 0)
 
             # Initialize Adam states on GPU
             self.optim = {
@@ -2031,6 +2077,8 @@ class GscNet():
         return self.C.dot(act)
 
     def check_divergence(self, tol=2.):
+        if self.use_jax:
+            return jnp.max(self.actC) > tol
         return max(self.actC) > tol
 
     def runC(self,
@@ -2050,24 +2098,48 @@ class GscNet():
         if log_trace:
             self.initialize_traces(trace_list)
 
-        while self.t < t_max:
-            self.update_stateC()
+        # For JAX: use JIT-compiled loop for maximum speed
+        if self.use_jax and not log_trace and tol is None and not update_T:
+            # Pure JAX fast path: JIT-compiled dynamics loop
+            num_steps = int(duration / self.dt)
 
-            if update_T and (self.opts['T_decay_rate'] > 0):
-                self.update_T()
-            if update_q:
-                self.update_q()
-            if log_trace:
-                self.update_traces()
+            def body_fun(i, carry):
+                actC, q, rng_key = carry
+                actC_new, q_new, rng_key_new = _dynamics_step_jax(
+                    actC, self.WC, self.bC, self.extC, self.bowl_center,
+                    self.opts['bowl_strength'], self.scale_constants,
+                    self.C, self.C_T, self.N, self.num_fillers,
+                    self.dt, self.T, q, self.opts['q_max'],
+                    self.opts['q_rate'] if update_q else 0.0,
+                    self.opts['m'], rng_key
+                )
+                return (actC_new, q_new, rng_key_new)
+            # Run JIT-compiled loop
+            init_carry = (self.actC, self.q, self.rng_key)
+            final_carry = jax.lax.fori_loop(0, num_steps, body_fun, init_carry)
+            self.actC, self.q, self.rng_key = final_carry
+            # Update derived quantities
+            self.actCmat = self.vec2mat()
+            self.t += num_steps * self.dt
+        else:
+            while self.t < t_max:
+                self.update_stateC()
 
-            if self.check_divergence():
-                # if dt is too big, the model may diverge.
-                break
+                if update_T and (self.opts['T_decay_rate'] > 0):
+                    self.update_T()
+                if update_q:
+                    self.update_q()
+                if log_trace:
+                    self.update_traces()
 
-            if tol is not None:
-                self.check_convergence(tol=tol)
-                if self.converged:
+                if self.check_divergence():
+                    # if dt is too big, the model may diverge.
                     break
+
+                if tol is not None:
+                    self.check_convergence(tol=tol)
+                    if self.converged:
+                        break
 
         self.act = self.C2N()
 
@@ -2128,7 +2200,7 @@ class GscNet():
             self.reset()
             self.set_state(mu=actC, sd=0.)
             if self.opts['use_runC']:
-                self.runC(dur)
+                self.runC(dur, log_trace=False)
             else:
                 self.run(dur)
             # if plot:
@@ -2146,11 +2218,12 @@ class GscNet():
     def add_noiseC(self):
 
         if self.use_jax:
-            # JAX version: use JAX random for GPU compatibility
+            # JAX version: for GPU compatibility
+            # JAX version: use JAX random with proper key splitting
+            self.rng_key, subkey = jax.random.split(self.rng_key)
             noise = jnp.sqrt(2 * self.T * self.dt) * \
-                jax.random.normal(
-                    jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
-                    shape=(self.num_units,)).astype(jnp.float32)
+                jax.random.normal(subkey, shape=(
+                    self.num_units,), dtype=jnp.float32)
             noiseC = jnp.sqrt(self.scale_constants) * \
                 self.N2C(noise)  # rescaling noise
             self.actC += noiseC
@@ -2179,10 +2252,10 @@ class GscNet():
 
         if self.use_jax:
             # JAX version: use JAX random for GPU compatibility
+            self.rng_key, subkey = jax.random.split(self.rng_key)
             self.actC = jax.random.uniform(
-                jax.random.PRNGKey(int(time.time() * 1e9) % (2**32)),
-                shape=(self.num_bindings,),
-                minval=minact, maxval=maxact).astype(jnp.float32)
+                subkey, shape=(self.num_bindings,),
+                minval=minact, maxval=maxact, dtype=jnp.float32)
         else:
             # NumPy version
             self.actC = np.random.uniform(
@@ -2354,10 +2427,9 @@ class GscNet():
 
         if self.use_jax:
             # JAX version: use JAX random for GPU compatibility
+            self.rng_key, subkey = jax.random.split(self.rng_key)
             noise_vec = jax.random.normal(
-                jax.random.PRNGKey(int(time.time() * 1e6) % (2**32)),
-                shape=(self.num_bindings,)) * sd
-            noise_vec = noise_vec.astype(jnp.float32)
+                subkey, shape=(self.num_bindings,), dtype=jnp.float32) * sd
         else:
             # NumPy version
             noise_vec = np.random.normal(
@@ -2897,12 +2969,18 @@ class GscNet():
             self.epoch_num += 1
 
             # mask = net.params_backup['WC'].astype(bool).astype(float)
-            mask = np.ones(self.WC.shape)
-            dWC = np.zeros(self.WC.shape)
-            dbC = np.zeros(self.bC.shape)
-            # FOR NOW: use same commitment strength for all roles
-            dqpolicy = np.zeros(self.qpolicy.shape)
-            destr = np.zeros(self.estr.shape)
+            # mask = np.ones(self.WC.shape)
+            # Initialize gradients with correct array type
+            if self.use_jax:
+                dWC = jnp.zeros(self.WC.shape, dtype=jnp.float32)
+                dbC = jnp.zeros(self.bC.shape, dtype=jnp.float32)
+                destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
+                dqpolicy = jnp.zeros(self.qpolicy.shape, dtype=jnp.float32)
+            else:
+                dWC = np.zeros(self.WC.shape)
+                dbC = np.zeros(self.bC.shape)
+                destr = np.zeros(self.estr.shape)
+                dqpolicy = np.zeros(self.qpolicy.shape)
             xent = {}
             xent['trees'] = 0.
             xent['treelets'] = 0.
@@ -2938,7 +3016,7 @@ class GscNet():
                         self.subset_corpus(prefix_bnames))
                     # TEST: change estimate_prob_inc to estimate_prob_inc_jax
                     if JAX_AVAILABLE:
-                        stat_Q, actC_set = self.estimate_prob_inc_jax(
+                        stat_Q = self.estimate_prob_inc_jax(
                             prefix=prefix, num_trials=self.train_opts['num_trials'])
                     else:
                         stat_Q, actC_set = self.estimate_prob_inc(
@@ -2957,7 +3035,11 @@ class GscNet():
                         # currently, one word at a time
                         prefix_bnames = prefix_bnames[-1]
                         self.set_input(prefix_bnames)
-                    extC_token = self.extC.astype(bool).astype(int)
+                    # Efficient boolean→int conversion for JAX
+                    if self.use_jax:
+                        extC_token = (self.extC != 0).astype(jnp.int32)
+                    else:
+                        extC_token = self.extC.astype(bool).astype(int)
 
                     kl_curr, xent_curr, err, err_log = self.cost(
                         stat_P, stat_Q_new)
@@ -3040,16 +3122,24 @@ class GscNet():
                     role_idx_list = np.random.choice(
                         self.num_roles, self.num_treelets_update, replace=False)
 
-                maskbC_update = np.zeros(self.num_bindings)
                 # rnames = [self.role_names[rid] for rid in role_idx_list]
                 # idx = self.find_roles(rnames)
-                idx = np.concatenate([self.role_to_binding_indices[rid]]
-                                     for rid in role_idx_list)
-                maskbC_update[idx] = 1.
-
-                maskWC_update = np.zeros(
-                    (self.num_bindings, self.num_bindings))
-                treelet_list = []
+                if self.use_jax:
+                    maskbC_update = jnp.zeros(
+                        self.num_bindings, dtype=jnp.float32)
+                    maskWC_update = jnp.zeros(
+                        (self.num_bindings, self.num_bindings), dtype=jnp.float32)
+                else:
+                    maskbC_update = np.zeros(self.num_bindings)
+                    maskWC_update = np.zeros(
+                        (self.num_bindings, self.num_bindings))
+                idx = np.concatenate([self.role_to_binding_indices[rid]
+                                      for rid in role_idx_list])
+                if self.use_jax:
+                    maskbC_update = maskbC_update.at[idx].set(1.0)
+                else:
+                    maskbC_update[idx] = 1.
+                # treelet_list = []
                 for rid in role_idx_list:
                     #     r_daughters = self.hg.roles.get_daughters(
                     #         self.role_names[rid])
@@ -3066,10 +3156,23 @@ class GscNet():
                         idx = np.concatenate([idx_self, idx_l, idx_r])
                     else:
                         idx = self.role_to_binding_indices[rid]
-                    maskWC_update[np.ix_(idx, idx)] = 1.
+                    if self.use_jax:
+                        # For JAX: use .at indexing
+                        idx_i, idx_j = np.meshgrid(idx, idx, indexing='ij')
+                        maskWC_update = maskWC_update.at[idx_i.flatten(
+                        ), idx_j.flatten()].set(1.0)
+                    else:
+                        maskWC_update[np.ix_(idx, idx)] = 1.
             else:
-                maskWC_update = np.ones((self.num_bindings, self.num_bindings))
-                maskbC_update = np.ones(self.num_bindings)
+                if self.use_jax:
+                    maskWC_update = jnp.ones(
+                        (self.num_bindings, self.num_bindings), dtype=jnp.float32)
+                    maskbC_update = jnp.ones(
+                        self.num_bindings, dtype=jnp.float32)
+                else:
+                    maskWC_update = np.ones(
+                        (self.num_bindings, self.num_bindings))
+                    maskbC_update = np.ones(self.num_bindings)
 
             if self.train_opts['update_w']:
                 # print('epoch num=', epi, destr)
@@ -3091,11 +3194,9 @@ class GscNet():
                     if self.train_opts['optimizer'] == 'adam':
                         if self.use_jax:
                             # Ensure gradients are JAX arrays
-                            if not isinstance(dWC, jnp.ndarray):
-                                dWC = jnp.array(dWC)
-                            if not isinstance(maskWC_update, jnp.ndarray):
-                                maskWC_update = jnp.array(
-                                    maskWC_update) if maskWC_update is not None else None
+                            if not isinstance(weight_decay, jnp.ndarray):
+                                weight_decay = jnp.array(
+                                    weight_decay, dtype=jnp.float32)
 
                             # JAX Adam update (JIT-compiled, all on GPU)
                             self.WC, self.optim['M_WC'], self.optim['R_WC'], self.optim['step_WC'] = \
@@ -3140,11 +3241,6 @@ class GscNet():
                 if not self.opts['use_second_order_bias']:
                     if self.train_opts['optimizer'] == 'adam':
                         if self.use_jax:
-                            if not isinstance(dbC, jnp.ndarray):
-                                dbC = jnp.array(dbC)
-                            if not isinstance(maskbC_update, jnp.ndarray):
-                                maskbC_update = jnp.array(
-                                    maskbC_update) if maskbC_update is not None else None
 
                             self.bC, self.optim['M_bC'], self.optim['R_bC'], self.optim['step_bC'] = \
                                 _adam_update_jax(
@@ -3402,7 +3498,7 @@ class GscNet():
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
 
         # print(f"Running {num_trials} trials in parallel on GPU...")
-        t0 = time.time()
+        # t0 = time.time()
 
         # Extract network parameters for JAX
         net_params = _extract_net_params_for_jax(self)
@@ -3413,13 +3509,13 @@ class GscNet():
         rng = jax.random.PRNGKey(rng_seed)
         rng_keys = jax.random.split(rng, num_trials)
 
-        # Run all trials in parallel on GPU
-        actC_batch, grid_point_batch = _run_trials_batched_jax(
+        # Run all trials in parallel on GPU, ignore actC_batch from the output
+        _, grid_point_batch = _run_trials_batched_jax(
             rng_keys, net_params, prefix, update_q_discrete
         )
 
         # Convert back to numpy for compatibility with existing code
-        actC_batch = np.array(actC_batch)
+        # actC_batch = np.array(actC_batch)
         grid_point_batch = np.array(grid_point_batch)
 
         # print(f"GPU execution time: {time.time() - t0:.3f}s")
@@ -3427,10 +3523,10 @@ class GscNet():
         # Process results (same as original - aggregate unique states)
         # CRITICAL FIX: Use grid points (discrete) not continuous actC for aggregation
         # Convert grid point indices to one-hot actC vectors (like CPU version does)
-        t_post = time.time()
+        # t_post = time.time()
 
         # Store continuous actC for return value
-        actC_list = actC_batch.tolist()  # Fast batch conversion
+        # actC_list = actC_batch.tolist()  # Fast batch conversion
 
         # OPTIMIZATION 1: Vectorized one-hot encoding
         # Instead of looping, use advanced indexing
@@ -3439,7 +3535,7 @@ class GscNet():
 
         actC_discrete_batch = np.zeros((num_trials, self.num_bindings))
         role_indices = np.arange(self.num_roles)  # [0, 1, 2, ..., num_roles-1]
-
+        state_counts = {}  # {tuple(grid_point): count}
         for trial_id in range(num_trials):
             binding_indices = role_indices * self.num_fillers + \
                 grid_point_batch[trial_id].astype(int)
@@ -3447,9 +3543,7 @@ class GscNet():
 
         # OPTIMIZATION 2: Use dictionary with tuple keys for O(1) lookup Instead of list membership testing and list.index() which are O(n)
 
-        state_counts = {}  # {tuple(grid_point): count}
-
-        for trial_id in range(num_trials):
+        # for trial_id in range(num_trials):
             # Use grid_point as hashable key (faster than comparing full one-hot vectors)
             gp_key = tuple(grid_point_batch[trial_id])
 
@@ -3478,10 +3572,10 @@ class GscNet():
         corpus['target'] = np.array(corpus['target'])
         corpus['count'] = np.array(corpus['count'])
         corpus['prob_sent'] = corpus['count'] / corpus['count'].sum()
-        print(f"Post-processing time: {time.time() - t_post:.3f}s")
+        # print(f"Post-processing time: {time.time() - t_post:.3f}s")
 
         stat = self.get_corpus_stat(corpus)
-        return stat, np.array(actC_list)
+        return stat
 
     def get_role_and_daughter_indices_fast(self, role_idx):
         """
@@ -3581,11 +3675,19 @@ class GscNet():
 
             binding_names = binding_names_new
 
-        curr_extC = np.zeros(self.num_bindings)
         idx = self.find_bindings_fast(binding_names)
-        curr_extC[idx] = 1.
+        if self.use_jax:
+            # JAX version: use JAX arrays
+            curr_extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+            if len(idx) > 0:
+                curr_extC = curr_extC.at[idx].set(1.0)
+            self.extC = self.extC + self.estr * curr_extC
+        else:
+            # NumPy version
+            curr_extC = np.zeros(self.num_bindings)
+            curr_extC[idx] = 1.
+            self.extC += self.estr * curr_extC
 
-        self.extC += self.estr * curr_extC
         self.ext = self.C2N(self.extC)
 
     def cost(self, stat_P, stat_Q):
@@ -3701,11 +3803,17 @@ class GscNet():
         idx_terminal = np.concatenate([self.role_to_binding_indices[ri]
                                        for ri in rname_terminal])
 
-        dWC = np.zeros(self.WC.shape)
-        dbC = np.zeros(self.bC.shape)
-        destr = np.zeros(self.estr.shape)
-        dq = np.zeros(self.num_roles)
-
+        # Initialize gradients with correct array type
+        if self.use_jax:
+            dWC = jnp.zeros(self.WC.shape, dtype=jnp.float32)
+            dbC = jnp.zeros(self.bC.shape, dtype=jnp.float32)
+            destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
+            dq = jnp.zeros(self.num_roles, dtype=jnp.float32)
+        else:
+            dWC = np.zeros(self.WC.shape)
+            dbC = np.zeros(self.bC.shape)
+            destr = np.zeros(self.estr.shape)
+            dq = np.zeros(self.num_roles)
         if self.train_opts['bias1_only']:
 
             keys_tree = [key for key in err['trees']]
@@ -3732,10 +3840,21 @@ class GscNet():
                         if self.train_opts['err_tree_positive_only']:
                             val = max(val, 0.)
 
-                        state = np.zeros(self.num_bindings)
-                        state[list(key)] = 1.
+                        key_idx = np.array(list(key), dtype=np.int32)
+                        if self.use_jax:
+                            state = jnp.zeros(
+                                self.num_bindings, dtype=jnp.float32)
+                            state = state.at[key_idx].set(1.0)
+                        else:
+                            state = np.zeros(self.num_bindings)
+                            state[key_idx] = 1.
                         # dbC += state * self.train_opts['mask0'] * val * self.train_opts['coef']['trees']
-                        dbC += state * val * self.train_opts['coef']['trees']
+                        if self.use_jax:
+                            dbC = dbC + state * val * \
+                                self.train_opts['coef']['trees']
+                        else:
+                            dbC += state * val * \
+                                self.train_opts['coef']['trees']
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
@@ -3743,33 +3862,54 @@ class GscNet():
                                     key) if ii in idx_terminal]
                             else:
                                 idx_tb = list(key)
-                            destr[idx_tb] += extC_token[idx_tb] * \
-                                val * \
-                                self.train_opts['coef']['trees']  # * actC[idx_tb]
+                            idx_tb = np.array(idx_tb, dtype=np.int32)
+                            if self.use_jax:
+                                destr = destr.at[idx_tb].add(
+                                    extC_token[idx_tb] * val * self.train_opts['coef']['trees'])
+                            else:
+                                destr[idx_tb] += extC_token[idx_tb] * \
+                                    val * self.train_opts['coef']['trees']
 
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():
 
                     if key in keys_treelet:  # pwc: new
-                        key = list(key)
-                        dbC[key[0]] += val * \
-                            self.train_opts['coef']['treelets']
+                        key = np.array(list(key), dtype=np.int32)
+                        if self.use_jax:
+                            dbC = dbC.at[key[0]].add(
+                                val * self.train_opts['coef']['treelets'])
+                        else:
+                            dbC[key[0]] += val * \
+                                self.train_opts['coef']['treelets']
 
                         if self.train_opts['update_estr']:
                             if not self.train_opts['update_estr_terminals_only']:
-                                destr[key] += extC_token[key] * \
-                                    val * self.train_opts['coef']['treelets']
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * val * self.train_opts['coef']['treelets'])
+                                else:
+                                    destr[key] += extC_token[key] * \
+                                        val * \
+                                        self.train_opts['coef']['treelets']
 
                 for key, val in err['bindings'].items():
 
                     if key in keys_binding:
                         if key in idx_terminal:
-                            dbC[key] += val * \
-                                self.train_opts['coef']['treelets']
+                            if self.use_jax:
+                                dbC = dbC.at[key].add(
+                                    val * self.train_opts['coef']['treelets'])
+                            else:
+                                dbC[key] += val * \
+                                    self.train_opts['coef']['treelets']
 
                             if self.train_opts['update_estr']:
-                                destr[key] += extC_token[key] * val * \
-                                    self.train_opts['coef']['treelets']  # * actC[idx_tb]
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * val * self.train_opts['coef']['treelets'])
+                                else:
+                                    destr[key] += extC_token[key] * val * \
+                                        self.train_opts['coef']['treelets']
 
                                 # print('bname =', self.binding_names[key])
                                 # print('extC =', extC_token[key])
@@ -3780,18 +3920,32 @@ class GscNet():
 
             if self.train_opts['coef']['binding_pairs'] > 0.:
                 for key, val in err['binding_pairs'].items():
-                    key = list(key)
-                    dbC[key[0]] += val * \
-                        self.train_opts['coef']['binding_pairs']
-                    dbC[key[1]] += val * \
-                        self.train_opts['coef']['binding_pairs']
+                    key = np.array(list(key), dtype=np.int32)
+                    if self.use_jax:
+                        dbC = dbC.at[key[0]].add(
+                            val * self.train_opts['coef']['binding_pairs'])
+                        dbC = dbC.at[key[1]].add(
+                            val * self.train_opts['coef']['binding_pairs'])
+                    else:
+                        dbC[key[0]] += val * \
+                            self.train_opts['coef']['binding_pairs']
+                        dbC[key[1]] += val * \
+                            self.train_opts['coef']['binding_pairs']
 
             if self.train_opts['coef']['bindings'] > 0.:
                 for key, val in err['bindings'].items():
-                    dbC[key] += val * self.train_opts['coef']['bindings']
+                    if self.use_jax:
+                        dbC = dbC.at[key].add(
+                            val * self.train_opts['coef']['bindings'])
+                    else:
+                        dbC[key] += val * self.train_opts['coef']['bindings']
                     if self.train_opts['update_estr']:
-                        destr[key] += extC_token[key] * val * \
-                            self.train_opts['coef']['bindings']  # * actC[idx_tb]
+                        if self.use_jax:
+                            destr = destr.at[key].add(
+                                extC_token[key] * val * self.train_opts['coef']['bindings'])
+                        else:
+                            destr[key] += extC_token[key] * val * \
+                                self.train_opts['coef']['bindings']
 
             # ENTROPY (use parse structures)
             if self.train_opts['coef_q'] > 0.:
@@ -3823,11 +3977,20 @@ class GscNet():
                         if self.train_opts['err_tree_positive_only']:
                             val = max(val, 0.)
 
-                        state = np.zeros(self.num_bindings)
-                        state[list(key)] = 1.
-                        dWC += np.outer(state, state) * \
-                            self.train_opts['mask0'] * val * \
-                            self.train_opts['coef']['trees']
+                        key_idx = np.array(list(key), dtype=np.int32)
+                        if self.use_jax:
+                            state = jnp.zeros(
+                                self.num_bindings, dtype=jnp.float32)
+                            state = state.at[key_idx].set(1.0)
+                            dWC = dWC + jnp.outer(state, state) * \
+                                self.train_opts['mask0'] * val * \
+                                self.train_opts['coef']['trees']
+                        else:
+                            state = np.zeros(self.num_bindings)
+                            state[key_idx] = 1.
+                            dWC += np.outer(state, state) * \
+                                self.train_opts['mask0'] * val * \
+                                self.train_opts['coef']['trees']
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
@@ -3835,44 +3998,65 @@ class GscNet():
                                     key) if ii in idx_terminal]
                             else:
                                 idx_tb = list(key)
-                            destr[idx_tb] += extC_token[idx_tb] * \
-                                val * \
-                                self.train_opts['coef']['trees']  # * actC[idx_tb]
+                            idx_tb = np.array(idx_tb, dtype=np.int32)
+                            if self.use_jax:
+                                destr = destr.at[idx_tb].add(
+                                    extC_token[idx_tb] * val * self.train_opts['coef']['trees'])
+                            else:
+                                destr[idx_tb] += extC_token[idx_tb] * \
+                                    val * self.train_opts['coef']['trees']
 
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():
 
                     if key in keys_treelet:  # pwc: new
-                        key = list(key)
-
+                        key = np.array(list(key), dtype=np.int32)
+                        coef_val = val * self.train_opts['coef']['treelets']
                         if not self.train_opts['bias_only']:
-                            dWC[key[0], key[1]] += val * \
-                                self.train_opts['coef']['treelets']
-                            dWC[key[1], key[0]] += val * \
-                                self.train_opts['coef']['treelets']
-                            dWC[key[0], key[2]] += val * \
-                                self.train_opts['coef']['treelets']
-                            dWC[key[2], key[0]] += val * \
-                                self.train_opts['coef']['treelets']
+                            if self.use_jax:
+                                dWC = dWC.at[key[0], key[1]].add(coef_val)
+                                dWC = dWC.at[key[1], key[0]].add(coef_val)
+                                dWC = dWC.at[key[0], key[2]].add(coef_val)
+                                dWC = dWC.at[key[2], key[0]].add(coef_val)
+                            else:
+                                dWC[key[0], key[1]] += coef_val
+                                dWC[key[1], key[0]] += coef_val
+                                dWC[key[0], key[2]] += coef_val
+                                dWC[key[2], key[0]] += coef_val
 
-                        dWC[key[0], key[0]] += val * \
-                            self.train_opts['coef']['treelets']
+                        if self.use_jax:
+                            dWC = dWC.at[key[0], key[0]].add(coef_val)
+                        else:
+                            dWC[key[0], key[0]] += coef_val
 
                         if self.train_opts['update_estr']:
                             if not self.train_opts['update_estr_terminals_only']:
-                                destr[key] += extC_token[key] * \
-                                    val * self.train_opts['coef']['treelets']
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * val * self.train_opts['coef']['treelets'])
+                                else:
+                                    destr[key] += extC_token[key] * \
+                                        val * \
+                                        self.train_opts['coef']['treelets']
 
                 for key, val in err['bindings'].items():
 
                     if key in keys_binding:
                         if key in idx_terminal:
-                            dWC[key, key] += val * \
+                            coef_val = val * \
                                 self.train_opts['coef']['treelets']
+                            if self.use_jax:
+                                dWC = dWC.at[key, key].add(coef_val)
+                            else:
+                                dWC[key, key] += coef_val
 
                             if self.train_opts['update_estr']:
-                                destr[key] += extC_token[key] * val * \
-                                    self.train_opts['coef']['treelets']  # * actC[idx_tb]
+
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * coef_val)
+                                else:
+                                    destr[key] += extC_token[key] * coef_val
 
                                 # print('bname =', self.binding_names[key])
                                 # print('extC =', extC_token[key])
@@ -3884,17 +4068,27 @@ class GscNet():
             if self.train_opts['coef']['binding_pairs'] > 0.:
                 for key, val in err['binding_pairs'].items():
                     key = list(key)
-                    dWC[key[0], key[1]] += val * \
-                        self.train_opts['coef']['binding_pairs']
-                    dWC[key[1], key[0]] += val * \
-                        self.train_opts['coef']['binding_pairs']
+                    coef_val = val * self.train_opts['coef']['binding_pairs']
+                    if self.use_jax:
+                        dWC = dWC.at[key[0], key[1]].add(coef_val)
+                        dWC = dWC.at[key[1], key[0]].add(coef_val)
+                    else:
+                        dWC[key[0], key[1]] += coef_val
+                        dWC[key[1], key[0]] += coef_val
 
             if self.train_opts['coef']['bindings'] > 0.:
                 for key, val in err['bindings'].items():
-                    dWC[key, key] += val * self.train_opts['coef']['bindings']
+                    coef_val = val * self.train_opts['coef']['bindings']
+                    if self.use_jax:
+                        dWC = dWC.at[key, key].add(coef_val)
+                    else:
+                        dWC[key, key] += coef_val
                     if self.train_opts['update_estr']:
-                        destr[key] += extC_token[key] * val * \
-                            self.train_opts['coef']['bindings']  # * actC[idx_tb]
+                        if self.use_jax:
+                            destr = destr.at[key].add(
+                                extC_token[key] * coef_val)
+                        else:
+                            destr[key] += extC_token[key] * coef_val
 
             # ENTROPY (use parse structures)
             if self.train_opts['coef_q'] > 0.:
