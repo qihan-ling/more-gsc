@@ -2099,7 +2099,7 @@ class GscNet():
             self.initialize_traces(trace_list)
 
         # For JAX: use JIT-compiled loop for maximum speed
-        if self.use_jax and not log_trace and tol is None and not update_T:
+        if self.use_jax and not log_trace and tol is None and (self.opts['T_decay_rate'] <= 0):
             # Pure JAX fast path: JIT-compiled dynamics loop
             num_steps = int(duration / self.dt)
 
@@ -2116,9 +2116,11 @@ class GscNet():
                 return (actC_new, q_new, rng_key_new)
             # Run JIT-compiled loop
             init_carry = (self.actC, self.q, self.rng_key)
+            print("DEBUG: _dynamics_step_jax body_fun starts")
             final_carry = jax.lax.fori_loop(0, num_steps, body_fun, init_carry)
             self.actC, self.q, self.rng_key = final_carry
             # Update derived quantities
+            print("DEBUG: _dynamics_step_jax body_fun ends and vec2mat() starts")
             self.actCmat = self.vec2mat()
             self.t += num_steps * self.dt
         else:
@@ -2190,21 +2192,21 @@ class GscNet():
             self.ep = self.N2C(ep)
 
         elif method == 'integration':
-
             T_init_backup = self.opts['T_init']
             q_rate_backup = self.opts['q_rate']
 
             self.opts['T_init'] = 0.
             self.opts['q_rate'] = 0.
-
             self.reset()
             self.set_state(mu=actC, sd=0.)
             if self.opts['use_runC']:
+                print('DEBUG: get_ep runC()')
                 self.runC(dur, log_trace=False)
             else:
                 self.run(dur)
             # if plot:
             #     self.plot_trace('actC')
+            print('DEBUG: get_ep finish runC()')
             self.ep = self.actC.copy()
             self.opts['T_init'] = T_init_backup
             self.opts['q_rate'] = q_rate_backup
@@ -2729,7 +2731,6 @@ class GscNet():
         return winners
 
     def check_convergence(self, tol, testvar='H_increase'):
-
         if testvar == 'H_increase':
             self.H_now = self.H()
             if self.H_now - self.maxH > self.opts['min_H_increase']:
@@ -2957,8 +2958,12 @@ class GscNet():
             prefix_list = [[]]
 
         if prefix_weights is None:
-            prefix_weights = np.ones(len(prefix_list))
-            prefix_weights /= prefix_weights.sum()
+            if self.use_jax:
+                prefix_weights = jnp.ones(len(prefix_list), dtype=jnp.float32)
+                prefix_weights = prefix_weights / prefix_weights.sum()
+            else:
+                prefix_weights = np.ones(len(prefix_list))
+                prefix_weights /= prefix_weights.sum()
 
         maxlen_prefix = 0
         for prefix in prefix_list:
@@ -2999,11 +3004,9 @@ class GscNet():
                 dWC_parse, acc, dbC_parse = self.train_parallel_parsing()
                 dWC += dWC_parse
                 dbC += dbC_parse
-
             for pi, prefix in enumerate(prefix_list):
 
                 if prefix_weights[pi] > 0:
-
                     if len(prefix) > 0:
                         scale_dWC = self.train_opts['scale_dWC_parser']
                         prefix_bnames = [ftype + self.hg.opts['bsep'] + '(1,{})'.format(wi + 1)
@@ -3011,7 +3014,6 @@ class GscNet():
                     else:
                         scale_dWC = 1.0
                         prefix_bnames = []
-
                     stat_P = self.get_corpus_stat(
                         self.subset_corpus(prefix_bnames))
                     # TEST: change estimate_prob_inc to estimate_prob_inc_jax
@@ -3029,7 +3031,6 @@ class GscNet():
                             stat_Q_new = stat_Q
                     else:
                         stat_Q_new = stat_Q
-
                     self.clear_input()
                     if len(prefix_bnames) > 0:
                         # currently, one word at a time
@@ -3040,11 +3041,9 @@ class GscNet():
                         extC_token = (self.extC != 0).astype(jnp.int32)
                     else:
                         extC_token = self.extC.astype(bool).astype(int)
-
                     kl_curr, xent_curr, err, err_log = self.cost(
                         stat_P, stat_Q_new)
                     self.stat_Q_prev = stat_Q_new  #
-
                     if self.train_opts['use_err_avg']:
                         err_avg = {}
                         for key1, _ in err.items():
@@ -3093,7 +3092,6 @@ class GscNet():
             #     for len_prefix in range(1, maxlen_prefix + 1):
             #         qvec = self.qpolicy[len_prefix] + dqvec_dict[len_prefix]
             #         self.qpolicy[len_prefix] = np.maximum(self.qpolicy[len_prefix - 1], qvec)
-
             if self.train_opts['asynchronous_update']:
 
                 if self.train_opts['asynchronous_update_choose_errmax']:
@@ -3121,7 +3119,6 @@ class GscNet():
                 else:
                     role_idx_list = np.random.choice(
                         self.num_roles, self.num_treelets_update, replace=False)
-
                 # rnames = [self.role_names[rid] for rid in role_idx_list]
                 # idx = self.find_roles(rnames)
                 if self.use_jax:
@@ -3173,7 +3170,6 @@ class GscNet():
                     maskWC_update = np.ones(
                         (self.num_bindings, self.num_bindings))
                     maskbC_update = np.ones(self.num_bindings)
-
             if self.train_opts['update_w']:
                 # print('epoch num=', epi, destr)
 
@@ -3237,7 +3233,6 @@ class GscNet():
                 if self.train_opts['bias1_only']:
                     self.bC += self.train_opts['lrate'] * dbC * maskbC_update
                     self._set_biases()
-
                 if not self.opts['use_second_order_bias']:
                     if self.train_opts['optimizer'] == 'adam':
                         if self.use_jax:
@@ -3271,31 +3266,26 @@ class GscNet():
 
                 if self.train_opts['update_estr']:
                     self.estr += self.train_opts['lrate'] * destr
-
                 if self.train_opts['average_weight']:
                     self.average_weight()
-
                 if self.train_opts['average_filler_bias']:
                     self.average_filler_bias()
-
                 if self.train_opts['update_bowl_strength']:
                     self.update_bowl_strength()
-
                 if self.train_opts['coef_q'] > 0.:
                     qpolicy = self.qpolicy + \
                         self.train_opts['lrate'] * dqpolicy
                     for ii in range(1, len(self.qpolicy)):
                         qpolicy[ii] = max(qpolicy[ii], self.qpolicy[ii - 1])
                     self.qpolicy = qpolicy
-
                 self.reset()    # reset q val
+                print(f"DEBUG: get_ep()")
                 self.get_ep(method=self.train_opts['ep_method'])
 
             # print('Check', np.max(abs(dWC)))
 
             dWC_max = np.max(abs(dWC))
             dbC_max = np.max(abs(dbC))
-
             if 'report_cycle' in self.train_opts:
                 report_cycle = self.train_opts['report_cycle']
             else:
@@ -3345,7 +3335,6 @@ class GscNet():
 
             log['lrate'] = self.train_opts['lrate']
             log['num_trials'] = self.train_opts['num_trials']
-
             self.update_traces_train(log)
 
             if self.train_opts['adaptive_training']:
@@ -3362,7 +3351,7 @@ class GscNet():
             for key, val in self.traces_train.items():
                 if isinstance(val, list):
                     self.traces_train[key] = np.array(val)
-
+        print("DEBUG: end of train2():")
         if savefilename is not None:
             save_model(self, savefilename)
 
@@ -3372,8 +3361,12 @@ class GscNet():
         parallel_parser_nsamples = round(
             self.train_opts['num_trials'] * self.train_opts['parallel_parser_num_trials'])
 
-        dWC = np.zeros((self.num_bindings, self.num_bindings))
-        dbC = np.zeros(self.num_bindings)
+        if self.use_jax:
+            dWC = jnp.zeros((self.num_bindings, self.num_bindings))
+            dbC = jnp.zeros(self.num_bindings)
+        else:
+            dWC = np.zeros((self.num_bindings, self.num_bindings))
+            dbC = np.zeros(self.num_bindings)
         scale_dWC = self.train_opts['parallel_parser_dWC_scaler']
 
         n_sent = len(self.corpus['sentence'])
