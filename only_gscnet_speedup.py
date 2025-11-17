@@ -2722,6 +2722,10 @@ class GscNet():
         else:
             actCmat = self.vec2mat(actC=actC)
 
+        # Convert to NumPy array to avoid JAX indexing errors
+        if self.use_jax:
+            actCmat = np.asarray(actCmat)
+
         winner_idx = np.argmax(actCmat, axis=0)
         winners = [self.filler_names[ii] for ii in winner_idx]
         winners = ["%s/%s" % bb for bb in zip(winners, self.role_names)]
