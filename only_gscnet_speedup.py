@@ -3680,9 +3680,18 @@ class GscNet():
 
         curr_extC = np.zeros(self.num_bindings)
         idx = self.find_bindings_fast(binding_names)
-        curr_extC[idx] = 1.
 
-        self.extC += self.estr * curr_extC
+        if self.use_jax:
+            # JAX version: use JAX arrays
+            curr_extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+            if len(idx) > 0:
+                curr_extC = curr_extC.at[idx].set(1.0)
+            self.extC = self.extC + self.estr * curr_extC
+        else:
+            # NumPy version
+            curr_extC[idx] = 1.
+            self.extC += self.estr * curr_extC
+
         self.ext = self.C2N(self.extC)
 
     def cost(self, stat_P, stat_Q):
@@ -3798,10 +3807,17 @@ class GscNet():
         idx_terminal = np.concatenate([self.role_to_binding_indices[ri]
                                        for ri in rname_terminal])
 
-        dWC = np.zeros(self.WC.shape)
-        dbC = np.zeros(self.bC.shape)
-        destr = np.zeros(self.estr.shape)
-        dq = np.zeros(self.num_roles)
+        # Initialize gradients with correct array type
+        if self.use_jax:
+            dWC = jnp.zeros(self.WC.shape, dtype=jnp.float32)
+            dbC = jnp.zeros(self.bC.shape, dtype=jnp.float32)
+            destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
+            dq = jnp.zeros(self.num_roles, dtype=jnp.float32)
+        else:
+            dWC = np.zeros(self.WC.shape)
+            dbC = np.zeros(self.bC.shape)
+            destr = np.zeros(self.estr.shape)
+            dq = np.zeros(self.num_roles)
 
         if self.train_opts['bias1_only']:
 
@@ -3829,8 +3845,13 @@ class GscNet():
                         if self.train_opts['err_tree_positive_only']:
                             val = max(val, 0.)
 
-                        state = np.zeros(self.num_bindings)
-                        state[np.array(list(key), dtype=np.int32)] = 1.
+                        key_idx = np.array(list(key), dtype=np.int32)
+                        if self.use_jax:
+                            state = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+                            state = state.at[key_idx].set(1.0)
+                        else:
+                            state = np.zeros(self.num_bindings)
+                            state[key_idx] = 1.
                         # dbC += state * self.train_opts['mask0'] * val * self.train_opts['coef']['trees']
                         dbC += state * val * self.train_opts['coef']['trees']
 
@@ -3922,11 +3943,19 @@ class GscNet():
                         if self.train_opts['err_tree_positive_only']:
                             val = max(val, 0.)
 
-                        state = np.zeros(self.num_bindings)
-                        state[np.array(list(key), dtype=np.int32)] = 1.
-                        dWC += np.outer(state, state) * \
-                            self.train_opts['mask0'] * val * \
-                            self.train_opts['coef']['trees']
+                        key_idx = np.array(list(key), dtype=np.int32)
+                        if self.use_jax:
+                            state = jnp.zeros(self.num_bindings, dtype=jnp.float32)
+                            state = state.at[key_idx].set(1.0)
+                            dWC += jnp.outer(state, state) * \
+                                self.train_opts['mask0'] * val * \
+                                self.train_opts['coef']['trees']
+                        else:
+                            state = np.zeros(self.num_bindings)
+                            state[key_idx] = 1.
+                            dWC += np.outer(state, state) * \
+                                self.train_opts['mask0'] * val * \
+                                self.train_opts['coef']['trees']
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
