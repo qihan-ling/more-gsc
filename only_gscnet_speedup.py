@@ -2960,6 +2960,10 @@ class GscNet():
             prefix_weights = np.ones(len(prefix_list))
             prefix_weights /= prefix_weights.sum()
 
+        # Convert prefix_weights to JAX array if using JAX
+        if self.use_jax:
+            prefix_weights = jnp.array(prefix_weights, dtype=jnp.float32)
+
         maxlen_prefix = 0
         for prefix in prefix_list:
             maxlen_prefix = max(maxlen_prefix, len(prefix))
@@ -3069,8 +3073,12 @@ class GscNet():
                     if len(prefix) > 0:
                         destr += destr_curr * prefix_weights[pi]
                         if self.train_opts['coef_q'] > 0:
-                            dqpolicy[len(prefix)] += dq_curr * \
-                                prefix_weights[pi]
+                            if self.use_jax:
+                                dqpolicy = dqpolicy.at[len(prefix)].add(
+                                    dq_curr * prefix_weights[pi])
+                            else:
+                                dqpolicy[len(prefix)] += dq_curr * \
+                                    prefix_weights[pi]
                     for key in xent:
                         xent[key] += xent_curr[key]
                     for key in kl:
