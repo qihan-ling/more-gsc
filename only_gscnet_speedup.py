@@ -3853,7 +3853,11 @@ class GscNet():
                             state = np.zeros(self.num_bindings)
                             state[key_idx] = 1.
                         # dbC += state * self.train_opts['mask0'] * val * self.train_opts['coef']['trees']
-                        dbC += state * val * self.train_opts['coef']['trees']
+
+                        if self.use_jax:
+                            dbC = dbC + state * val * self.train_opts['coef']['trees']
+                        else:
+                            dbC += state * val * self.train_opts['coef']['trees']
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
@@ -3863,33 +3867,50 @@ class GscNet():
                                 idx_tb = list(key)
                             # Convert to array for JAX compatibility
                             idx_tb = np.array(idx_tb, dtype=np.int32)
-                            destr[idx_tb] += extC_token[idx_tb] * \
-                                val * \
-                                self.train_opts['coef']['trees']  # * actC[idx_tb]
+
+                            if self.use_jax:
+                                destr = destr.at[idx_tb].add(
+                                    extC_token[idx_tb] * val * self.train_opts['coef']['trees'])
+                            else:
+                                destr[idx_tb] += extC_token[idx_tb] * \
+                                    val * self.train_opts['coef']['trees']
 
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():
 
                     if key in keys_treelet:  # pwc: new
                         key = np.array(list(key), dtype=np.int32)
-                        dbC[key[0]] += val * \
-                            self.train_opts['coef']['treelets']
+
+                        if self.use_jax:
+                            dbC = dbC.at[key[0]].add(val * self.train_opts['coef']['treelets'])
+                        else:
+                            dbC[key[0]] += val * self.train_opts['coef']['treelets']
 
                         if self.train_opts['update_estr']:
                             if not self.train_opts['update_estr_terminals_only']:
-                                destr[key] += extC_token[key] * \
-                                    val * self.train_opts['coef']['treelets']
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * val * self.train_opts['coef']['treelets'])
+                                else:
+                                    destr[key] += extC_token[key] * \
+                                        val * self.train_opts['coef']['treelets']
 
                 for key, val in err['bindings'].items():
 
                     if key in keys_binding:
                         if key in idx_terminal:
-                            dbC[key] += val * \
-                                self.train_opts['coef']['treelets']
+                            if self.use_jax:
+                                dbC = dbC.at[key].add(val * self.train_opts['coef']['treelets'])
+                            else:
+                                dbC[key] += val * self.train_opts['coef']['treelets']
 
                             if self.train_opts['update_estr']:
-                                destr[key] += extC_token[key] * val * \
-                                    self.train_opts['coef']['treelets']  # * actC[idx_tb]
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * val * self.train_opts['coef']['treelets'])
+                                else:
+                                    destr[key] += extC_token[key] * val * \
+                                        self.train_opts['coef']['treelets']
 
                                 # print('bname =', self.binding_names[key])
                                 # print('extC =', extC_token[key])
@@ -3901,17 +3922,27 @@ class GscNet():
             if self.train_opts['coef']['binding_pairs'] > 0.:
                 for key, val in err['binding_pairs'].items():
                     key = np.array(list(key), dtype=np.int32)
-                    dbC[key[0]] += val * \
-                        self.train_opts['coef']['binding_pairs']
-                    dbC[key[1]] += val * \
-                        self.train_opts['coef']['binding_pairs']
+                    if self.use_jax:
+                        dbC = dbC.at[key[0]].add(val * self.train_opts['coef']['binding_pairs'])
+                        dbC = dbC.at[key[1]].add(val * self.train_opts['coef']['binding_pairs'])
+                    else:
+                        dbC[key[0]] += val * self.train_opts['coef']['binding_pairs']
+                        dbC[key[1]] += val * self.train_opts['coef']['binding_pairs']
 
             if self.train_opts['coef']['bindings'] > 0.:
                 for key, val in err['bindings'].items():
-                    dbC[key] += val * self.train_opts['coef']['bindings']
+                    if self.use_jax:
+                        dbC = dbC.at[key].add(val * self.train_opts['coef']['bindings'])
+                    else:
+                        dbC[key] += val * self.train_opts['coef']['bindings']
+
                     if self.train_opts['update_estr']:
-                        destr[key] += extC_token[key] * val * \
-                            self.train_opts['coef']['bindings']  # * actC[idx_tb]
+                        if self.use_jax:
+                            destr = destr.at[key].add(
+                                extC_token[key] * val * self.train_opts['coef']['bindings'])
+                        else:
+                            destr[key] += extC_token[key] * val * \
+                                self.train_opts['coef']['bindings']
 
             # ENTROPY (use parse structures)
             if self.train_opts['coef_q'] > 0.:
@@ -3947,7 +3978,7 @@ class GscNet():
                         if self.use_jax:
                             state = jnp.zeros(self.num_bindings, dtype=jnp.float32)
                             state = state.at[key_idx].set(1.0)
-                            dWC += jnp.outer(state, state) * \
+                            dWC = dWC + jnp.outer(state, state) * \
                                 self.train_opts['mask0'] * val * \
                                 self.train_opts['coef']['trees']
                         else:
@@ -3965,9 +3996,13 @@ class GscNet():
                                 idx_tb = list(key)
                             # Convert to array for JAX compatibility
                             idx_tb = np.array(idx_tb, dtype=np.int32)
-                            destr[idx_tb] += extC_token[idx_tb] * \
-                                val * \
-                                self.train_opts['coef']['trees']  # * actC[idx_tb]
+
+                            if self.use_jax:
+                                destr = destr.at[idx_tb].add(
+                                    extC_token[idx_tb] * val * self.train_opts['coef']['trees'])
+                            else:
+                                destr[idx_tb] += extC_token[idx_tb] * \
+                                    val * self.train_opts['coef']['trees']
 
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():
@@ -3976,33 +4011,50 @@ class GscNet():
                         key = np.array(list(key), dtype=np.int32)
 
                         if not self.train_opts['bias_only']:
-                            dWC[key[0], key[1]] += val * \
-                                self.train_opts['coef']['treelets']
-                            dWC[key[1], key[0]] += val * \
-                                self.train_opts['coef']['treelets']
-                            dWC[key[0], key[2]] += val * \
-                                self.train_opts['coef']['treelets']
-                            dWC[key[2], key[0]] += val * \
-                                self.train_opts['coef']['treelets']
+                            coef_val = val * self.train_opts['coef']['treelets']
+                            if self.use_jax:
+                                dWC = dWC.at[key[0], key[1]].add(coef_val)
+                                dWC = dWC.at[key[1], key[0]].add(coef_val)
+                                dWC = dWC.at[key[0], key[2]].add(coef_val)
+                                dWC = dWC.at[key[2], key[0]].add(coef_val)
+                            else:
+                                dWC[key[0], key[1]] += coef_val
+                                dWC[key[1], key[0]] += coef_val
+                                dWC[key[0], key[2]] += coef_val
+                                dWC[key[2], key[0]] += coef_val
 
-                        dWC[key[0], key[0]] += val * \
-                            self.train_opts['coef']['treelets']
+                        coef_val = val * self.train_opts['coef']['treelets']
+                        if self.use_jax:
+                            dWC = dWC.at[key[0], key[0]].add(coef_val)
+                        else:
+                            dWC[key[0], key[0]] += coef_val
 
                         if self.train_opts['update_estr']:
                             if not self.train_opts['update_estr_terminals_only']:
-                                destr[key] += extC_token[key] * \
-                                    val * self.train_opts['coef']['treelets']
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * val * self.train_opts['coef']['treelets'])
+                                else:
+                                    destr[key] += extC_token[key] * \
+                                        val * self.train_opts['coef']['treelets']
 
                 for key, val in err['bindings'].items():
 
                     if key in keys_binding:
                         if key in idx_terminal:
-                            dWC[key, key] += val * \
-                                self.train_opts['coef']['treelets']
+                            coef_val = val * self.train_opts['coef']['treelets']
+                            if self.use_jax:
+                                dWC = dWC.at[key, key].add(coef_val)
+                            else:
+                                dWC[key, key] += coef_val
 
                             if self.train_opts['update_estr']:
-                                destr[key] += extC_token[key] * val * \
-                                    self.train_opts['coef']['treelets']  # * actC[idx_tb]
+                                if self.use_jax:
+                                    destr = destr.at[key].add(
+                                        extC_token[key] * val * self.train_opts['coef']['treelets'])
+                                else:
+                                    destr[key] += extC_token[key] * val * \
+                                        self.train_opts['coef']['treelets']  # * actC[idx_tb]
 
                                 # print('bname =', self.binding_names[key])
                                 # print('extC =', extC_token[key])
@@ -4014,17 +4066,29 @@ class GscNet():
             if self.train_opts['coef']['binding_pairs'] > 0.:
                 for key, val in err['binding_pairs'].items():
                     key = list(key)
-                    dWC[key[0], key[1]] += val * \
-                        self.train_opts['coef']['binding_pairs']
-                    dWC[key[1], key[0]] += val * \
-                        self.train_opts['coef']['binding_pairs']
+                    coef_val = val * self.train_opts['coef']['binding_pairs']
+                    if self.use_jax:
+                        dWC = dWC.at[key[0], key[1]].add(coef_val)
+                        dWC = dWC.at[key[1], key[0]].add(coef_val)
+                    else:
+                        dWC[key[0], key[1]] += coef_val
+                        dWC[key[1], key[0]] += coef_val
 
             if self.train_opts['coef']['bindings'] > 0.:
                 for key, val in err['bindings'].items():
-                    dWC[key, key] += val * self.train_opts['coef']['bindings']
+                    coef_val = val * self.train_opts['coef']['bindings']
+                    if self.use_jax:
+                        dWC = dWC.at[key, key].add(coef_val)
+                    else:
+                        dWC[key, key] += coef_val
+
                     if self.train_opts['update_estr']:
-                        destr[key] += extC_token[key] * val * \
-                            self.train_opts['coef']['bindings']  # * actC[idx_tb]
+                        if self.use_jax:
+                            destr = destr.at[key].add(
+                                extC_token[key] * val * self.train_opts['coef']['bindings'])
+                        else:
+                            destr[key] += extC_token[key] * val * \
+                                self.train_opts['coef']['bindings']  # * actC[idx_tb]
 
             # ENTROPY (use parse structures)
             if self.train_opts['coef_q'] > 0.:
