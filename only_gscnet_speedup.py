@@ -3666,7 +3666,10 @@ class GscNet():
             # JAX version: use JAX arrays
             curr_extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
             if len(idx) > 0:
-                curr_extC = curr_extC.at[idx].set(1.0)
+                if isinstance(idx, list):
+                    curr_extC = curr_extC.at[np.array(idx)].set(1.0)
+                else:
+                    curr_extC = curr_extC.at[idx].set(1.0)
             self.extC = self.extC + self.estr * curr_extC
         else:
             # NumPy version
