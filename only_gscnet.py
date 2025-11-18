@@ -1028,6 +1028,30 @@ class GscNet():
             name: bi for bi, name in enumerate(self.hg.binding_names)
         }
 
+        self.role_name_to_binding_indices = {}
+        # Build filler_name -> binding_indices mapping (matching slow find_fillers logic)
+        self.filler_name_to_binding_indices = {}
+        for bi, bname in enumerate(self.binding_names):
+            role_name = bname.split('/')[1]
+            if role_name not in self.role_name_to_binding_indices:
+                self.role_name_to_binding_indices[role_name] = []
+            filler_name = bname.split('/')[0]
+            if filler_name not in self.filler_name_to_binding_indices:
+                self.filler_name_to_binding_indices[filler_name] = []
+            self.filler_name_to_binding_indices[filler_name].append(bi)
+
+            self.role_name_to_binding_indices[role_name].append(bi)
+
+        # Convert lists to numpy arrays
+        for role_name in self.role_name_to_binding_indices:
+            self.role_name_to_binding_indices[role_name] = np.array(
+                self.role_name_to_binding_indices[role_name], dtype=np.int32)
+
+        # Convert lists to numpy arrays
+        for filler_name in self.filler_name_to_binding_indices:
+            self.filler_name_to_binding_indices[filler_name] = np.array(
+                self.filler_name_to_binding_indices[filler_name], dtype=np.int32)
+
         elapsed = time.time() - t0
         print(f"✓ GscNet fast lookups built in {elapsed:.3f}s "
               f"({num_roles} roles, {num_fillers} fillers, {num_bindings} bindings)")
@@ -1057,6 +1081,31 @@ class GscNet():
                 fi, self.hg.num_bindings, self.hg.num_fillers, dtype=np.int32
             )
 
+        self.role_name_to_binding_indices = {}
+        for bi, bname in enumerate(self.binding_names):
+            role_name = bname.split('/')[1]
+            if role_name not in self.role_name_to_binding_indices:
+                self.role_name_to_binding_indices[role_name] = []
+            self.role_name_to_binding_indices[role_name].append(bi)
+
+        # Convert lists to numpy arrays
+        for role_name in self.role_name_to_binding_indices:
+            self.role_name_to_binding_indices[role_name] = np.array(
+                self.role_name_to_binding_indices[role_name], dtype=np.int32)
+
+        # Build filler_name -> binding_indices mapping (matching slow find_fillers logic)
+        self.filler_name_to_binding_indices = {}
+        for bi, bname in enumerate(self.binding_names):
+            filler_name = bname.split('/')[0]
+            if filler_name not in self.filler_name_to_binding_indices:
+                self.filler_name_to_binding_indices[filler_name] = []
+            self.filler_name_to_binding_indices[filler_name].append(bi)
+
+        # Convert lists to numpy arrays
+        for filler_name in self.filler_name_to_binding_indices:
+            self.filler_name_to_binding_indices[filler_name] = np.array(
+                self.filler_name_to_binding_indices[filler_name], dtype=np.int32)
+
         # Use HG's pre-computed mappings (from Phase 1)
         self.role_name_to_idx = self.hg.roles.role_name_to_idx
         self.filler_name_to_idx = self.hg.g.filler_name_to_idx
@@ -1083,20 +1132,27 @@ class GscNet():
         print("✓ GscNet fast lookups complete!")
 
     def find_roles_fast(self, rnames):
-        '''Fast O(1) version of find_roles.'''
+        '''Return (list) of binding indices for a given role_names (str or list).
+
+        Args:
+            filler_names: (str) role name or
+                          (list of str) role names
+
+        Precondition:
+            role_names must contain legitimate role names.
+
+        Examples:
+            >>> net.find_role('0')
+            >>> net.find_role(['0', '1'])
+        '''
         if not isinstance(rnames, list):
             rnames = [rnames]
-
         if len(rnames) == 1:
-            role_idx = self.role_name_to_idx.get(rnames[0])
-            return self.role_to_binding_indices[role_idx] if role_idx is not None else np.array([], dtype=np.int32)
-
+            return self.role_name_to_binding_indices.get(rnames[0], np.array([], dtype=np.int32))
         result = []
         for rname in rnames:
-            role_idx = self.role_name_to_idx.get(rname)
-            if role_idx is not None:
-                result.append(self.role_to_binding_indices[role_idx])
-
+            if rname in self.role_name_to_binding_indices:
+                result.append(self.role_name_to_binding_indices[rname])
         return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
     def find_fillers_fast(self, fnames):
@@ -1104,14 +1160,12 @@ class GscNet():
         if not isinstance(fnames, list):
             fnames = [fnames]
         if len(fnames) == 1:
-            filler_idx = self.filler_name_to_idx.get(fnames[0])
-            return self.filler_to_binding_indices[filler_idx] if filler_idx is not None else np.array([], dtype=np.int32)
+            return self.filler_name_to_binding_indices.get(fnames[0], np.array([], dtype=np.int32))
 
         result = []
         for fname in fnames:
-            filler_idx = self.filler_name_to_idx.get(fname)
-            if filler_idx is not None:
-                result.append(self.filler_to_binding_indices[filler_idx])
+            if fname in self.filler_name_to_binding_indices:
+                result.append(self.filler_name_to_binding_indices[fname])
 
         return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
@@ -3026,7 +3080,7 @@ class GscNet():
             print("JAX not available, falling back to CPU version")
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
 
-        print(f"Running {num_trials} trials in parallel on GPU...")
+        # print(f"Running {num_trials} trials in parallel on GPU...")
         t0 = time.time()
 
         # Extract network parameters for JAX
@@ -3047,7 +3101,7 @@ class GscNet():
         actC_batch = np.array(actC_batch)
         grid_point_batch = np.array(grid_point_batch)
 
-        print(f"GPU execution time: {time.time() - t0:.3f}s")
+        # print(f"GPU execution time: {time.time() - t0:.3f}s")
 
         # Process results (same as original - aggregate unique states)
         # CRITICAL FIX: Use grid points (discrete) not continuous actC for aggregation
