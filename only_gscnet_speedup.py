@@ -4479,11 +4479,11 @@ class GscNet():
             self.set_input(bname, use_type=use_type, cumulative=True)
             if self.opts['use_runC']:
                 if word_rt[ii] <= word_rt0[ii]:
-                    self.runC(word_rt[ii])
+                    self.runC(word_rt[ii], log_trace=False)
                 else:
-                    self.runC(word_rt0[ii])
+                    self.runC(word_rt0[ii], log_trace=False)
                     self.opts['q_rate'] = 0.
-                    self.runC(word_rt[ii] - word_rt0[ii])
+                    self.runC(word_rt[ii] - word_rt0[ii], log_trace=False)
                     self.opts['q_rate'] = 1.
             else:
                 if word_rt[ii] <= word_rt0[ii]:
@@ -4536,7 +4536,8 @@ class GscNet():
             # print(null_input)
         if self.opts['use_runC']:
             # self.runC((self.opts['q_max'] - self.qpolicy[:ii+1].sum()) / self.opts['q_rate'])
-            self.runC((self.opts['q_max'] - min(self.q)) / self.opts['q_rate'])
+            self.runC((self.opts['q_max'] - min(self.q)) /
+                      self.opts['q_rate'], log_trace=False)
         else:
             # self.run((self.opts['q_max'] - self.qpolicy[:ii+1].sum()) / self.opts['q_rate'])
             self.run((self.opts['q_max'] - min(self.q)) / self.opts['q_rate'])
