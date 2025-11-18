@@ -2116,11 +2116,9 @@ class GscNet():
                 return (actC_new, q_new, rng_key_new)
             # Run JIT-compiled loop
             init_carry = (self.actC, self.q, self.rng_key)
-            print("DEBUG: _dynamics_step_jax body_fun starts")
             final_carry = jax.lax.fori_loop(0, num_steps, body_fun, init_carry)
             self.actC, self.q, self.rng_key = final_carry
             # Update derived quantities
-            print("DEBUG: _dynamics_step_jax body_fun ends and vec2mat() starts")
             self.actCmat = self.vec2mat()
             self.t += num_steps * self.dt
         else:
@@ -2200,13 +2198,11 @@ class GscNet():
             self.reset()
             self.set_state(mu=actC, sd=0.)
             if self.opts['use_runC']:
-                print('DEBUG: get_ep runC()')
                 self.runC(dur, log_trace=False)
             else:
                 self.run(dur)
             # if plot:
             #     self.plot_trace('actC')
-            print('DEBUG: get_ep finish runC()')
             self.ep = self.actC.copy()
             self.opts['T_init'] = T_init_backup
             self.opts['q_rate'] = q_rate_backup
@@ -3283,7 +3279,6 @@ class GscNet():
                         qpolicy[ii] = max(qpolicy[ii], self.qpolicy[ii - 1])
                     self.qpolicy = qpolicy
                 self.reset()    # reset q val
-                print(f"DEBUG: get_ep()")
                 self.get_ep(method=self.train_opts['ep_method'])
 
             # print('Check', np.max(abs(dWC)))
@@ -3355,7 +3350,6 @@ class GscNet():
             for key, val in self.traces_train.items():
                 if isinstance(val, list):
                     self.traces_train[key] = np.array(val)
-        print("DEBUG: end of train2():")
         if savefilename is not None:
             save_model(self, savefilename)
 
