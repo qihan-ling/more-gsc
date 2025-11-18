@@ -2716,8 +2716,10 @@ class GscNet():
             actCmat = self.vec2mat(actC=self.actC)
         else:
             actCmat = self.vec2mat(actC=actC)
-
-        winner_idx = np.argmax(actCmat, axis=0)
+        if isinstance(actCmat, jax.Array):
+            winner_idx = jnp.argmax(actCmat, axis=0)
+        else:
+            winner_idx = np.argmax(actCmat, axis=0)
         winners = [self.filler_names[ii] for ii in winner_idx]
         winners = ["%s/%s" % bb for bb in zip(winners, self.role_names)]
 
