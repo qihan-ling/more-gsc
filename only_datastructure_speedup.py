@@ -460,6 +460,8 @@ class PCFG():
             self._add_names()
 
     def _add_names(self):
+        import time
+        t0 = time.time()
 
         fnames = [val for rule in self.rules for key, val in rule.items()
                   if (key != 'p') and (val is not None)]
@@ -470,7 +472,7 @@ class PCFG():
             fnames.append(self.opts['null'])
 
         self.filler_names = fnames
-        # print(f"DEBUG: PCFG _add_names filler names is {self.filler_names}")
+        print(f"  PCFG._add_names(): Created {len(self.filler_names)} filler names from {len(self.rules)} rules in {time.time()-t0:.3f}s")
 
     def _sort_rules(self):
 
@@ -1563,10 +1565,20 @@ class HarmonicGrammar():
     def __init__(self, pcfg, root, max_sent_len, opts=None):
         self._set_opts(root=root, max_sent_len=max_sent_len)
         self._update_opts(opts)
+        import time
         self.pcfg_str = pcfg
+        print("Initializing PCFG...")
+        t0 = time.time()
         self.g0 = PCFG(pcfg=pcfg, root=root, opts=self.opts)  # original rule
+        print(f"  PCFG initialized in {time.time()-t0:.3f}s")
+        print("Creating deep copy of PCFG...")
+        t0 = time.time()
         self.g = copy.deepcopy(self.g0)
+        print(f"  Deep copy created in {time.time()-t0:.3f}s")
+        print("Creating roles...")
+        t0 = time.time()
         self._create_roles()
+        print(f"  Roles created successfully in {time.time()-t0:.3f}s")
         self._add_names()
         self.rules = []
         self._rules_set = set()  # Fast O(1) lookup for has_rule()
@@ -1744,12 +1756,28 @@ class HarmonicGrammar():
             sys.exit('You chose role_system that is not supported.')
 
     def _add_names(self):
+        import time
+        print("  _add_names() starting...")
+
+        t0 = time.time()
+        print("    Getting filler_names from PCFG...")
         self.filler_names = self.g.filler_names
+        print(f"    Got {len(self.filler_names)} filler_names in {time.time()-t0:.3f}s")
+
+        t0 = time.time()
+        print("    Getting role_names from BrickRole...")
         self.role_names = self.roles.role_names
+        print(f"    Got {len(self.role_names)} role_names in {time.time()-t0:.3f}s")
+
+        t0 = time.time()
+        print(f"    Creating binding_names ({len(self.filler_names)} fillers × {len(self.role_names)} roles = {len(self.filler_names) * len(self.role_names)} expected bindings)...")
         self.update_binding_names()
+        print(f"    Created {len(self.binding_names)} binding_names in {time.time()-t0:.3f}s")
+
         self.num_fillers = len(self.filler_names)
         self.num_roles = len(self.role_names)
         self.num_bindings = len(self.binding_names)
+        print(f"  _add_names() complete: {self.num_fillers} fillers, {self.num_roles} roles, {self.num_bindings} bindings")
 
     def _rule_to_key(self, rule):
         """Convert rule dict to hashable tuple for set lookup"""
@@ -2495,6 +2523,18 @@ class HarmonicGrammar():
         return parse
 
     def update_binding_names(self):
+        import time
+        t0 = time.time()
+
+        # Check types and lengths before creating bindings
+        print(f"      update_binding_names: role_names type={type(self.role_names)}, len={len(self.role_names)}")
+        print(f"      update_binding_names: filler_names type={type(self.filler_names)}, len={len(self.filler_names)}")
+        print(f"      update_binding_names: Creating {len(self.role_names)} × {len(self.filler_names)} = {len(self.role_names) * len(self.filler_names)} bindings...")
+
+        t_start = time.time()
         self.binding_names = [f + self.opts['bsep'] + r
                               for r in self.role_names
                               for f in self.filler_names]
+        t_end = time.time()
+
+        print(f"      update_binding_names: Created {len(self.binding_names)} bindings in {t_end - t_start:.3f}s")
