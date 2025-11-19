@@ -877,7 +877,9 @@ class PCFG():
 
     def is_terminal(self, fname):
         '''Returns (bool), whether whether fname (str) is a terminal symbol.'''
-
+        # Use cached lookup if available (O(1) instead of O(n))
+        if hasattr(self, 'filler_name_to_idx') and fname in self.filler_name_to_idx:
+            return self.filler_is_terminal[self.filler_name_to_idx[fname]]
         return fname in self.get_terminals()
 
     def is_bracketed(self, fname):
@@ -888,7 +890,9 @@ class PCFG():
         do not have any special status. By a "bracketed symbol", we mean
         a symbol that is a daughter in a non-copy, unary branching rule
         when opts['use_hnf'] is True.'''
-
+        # Use cached lookup if available (O(1) instead of O(n))
+        if hasattr(self, 'filler_name_to_idx') and fname in self.filler_name_to_idx:
+            return self.filler_is_bracketed[self.filler_name_to_idx[fname]]
         return self.opts['use_hnf'] and \
             (fname in [rule['d1'] for rule in self.rules
                        if (rule['d2'] is None) and
@@ -897,7 +901,6 @@ class PCFG():
 
     def get_bracketed(self):
         '''Returns (list) of bracketed symbols (str).'''
-
         return [fname for fi, fname in enumerate(self.filler_names)
                 if self.is_bracketed(fname)]
 
@@ -1782,7 +1785,11 @@ class HarmonicGrammar():
 
             rules_new = []
             rules_copy = []
+            rules_copy_set = set()  # Fast O(1) lookup to avoid duplicates
 
+            def rule_to_tuple(rule):
+                """Convert rule dict to hashable tuple for set operations"""
+                return (rule.get('m'), rule.get('d1'), rule.get('d2'), rule.get('p'))
             for rule in self.g.rules:
 
                 m = rule['m']
@@ -1819,14 +1826,13 @@ class HarmonicGrammar():
                                       'd1': None, 'd2': d2, 'p': None}
                         copy_rule4 = {'m': d2_copy, 'd1': None,
                                       'd2': d2_copy, 'p': None}
-                        if copy_rule1 not in rules_copy:
-                            rules_copy.append(copy_rule1)
-                        if copy_rule2 not in rules_copy:
-                            rules_copy.append(copy_rule2)
-                        if copy_rule3 not in rules_copy:
-                            rules_copy.append(copy_rule3)
-                        if copy_rule4 not in rules_copy:
-                            rules_copy.append(copy_rule4)
+
+                        # Use set for O(1) duplicate checking instead of O(n)
+                        for copy_rule in [copy_rule1, copy_rule2, copy_rule3, copy_rule4]:
+                            rule_tuple = rule_to_tuple(copy_rule)
+                            if rule_tuple not in rules_copy_set:
+                                rules_copy_set.add(rule_tuple)
+                                rules_copy.append(copy_rule)
 
                     elif self.g.is_terminal(d1) and not self.g.is_terminal(d2):
                         d1_copy = self.get_copy(d1)
@@ -1837,10 +1843,13 @@ class HarmonicGrammar():
                                       'd1': d1, 'd2': None, 'p': None}
                         copy_rule2 = {'m': d1_copy,
                                       'd1': d1_copy, 'd2': None, 'p': None}
-                        if copy_rule1 not in rules_copy:
-                            rules_copy.append(copy_rule1)
-                        if copy_rule2 not in rules_copy:
-                            rules_copy.append(copy_rule2)
+
+                        # Use set for O(1) duplicate checking instead of O(n)
+                        for copy_rule in [copy_rule1, copy_rule2]:
+                            rule_tuple = rule_to_tuple(copy_rule)
+                            if rule_tuple not in rules_copy_set:
+                                rules_copy_set.add(rule_tuple)
+                                rules_copy.append(copy_rule)
 
                     elif not self.g.is_terminal(d1) and self.g.is_terminal(d2):
                         d2_copy = self.get_copy(d2)
@@ -1851,10 +1860,13 @@ class HarmonicGrammar():
                                       'd1': None, 'd2': d2, 'p': None}
                         copy_rule2 = {'m': d2_copy, 'd1': None,
                                       'd2': d2_copy, 'p': None}
-                        if copy_rule1 not in rules_copy:
-                            rules_copy.append(copy_rule1)
-                        if copy_rule2 not in rules_copy:
-                            rules_copy.append(copy_rule2)
+
+                        # Use set for O(1) duplicate checking instead of O(n)
+                        for copy_rule in [copy_rule1, copy_rule2]:
+                            rule_tuple = rule_to_tuple(copy_rule)
+                            if rule_tuple not in rules_copy_set:
+                                rules_copy_set.add(rule_tuple)
+                                rules_copy.append(copy_rule)
                     else:
                         rules_new.append(rule)
 
@@ -1999,10 +2011,10 @@ class HarmonicGrammar():
                                  'br': self.g.is_bracketed(rule['d1'])}
                     if not self.has_rule(new_rule1):
                         # self.rules.append(new_rule1)
-                        self._append_rule(new_rule)
+                        self._append_rule(new_rule1)
                     if not self.has_rule(new_rule2):
                         # self.rules.append(new_rule2)
-                        self._append_rule(new_rule)
+                        self._append_rule(new_rule2)
 
     def _add_copy_rules(self):
 
