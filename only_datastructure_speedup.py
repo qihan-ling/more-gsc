@@ -880,6 +880,10 @@ class PCFG():
     def is_terminal(self, fname):
         '''Returns (bool), whether whether fname (str) is a terminal symbol.'''
 
+        # Use cached lookup if available (O(1) instead of O(n))
+        if hasattr(self, 'filler_name_to_idx') and fname in self.filler_name_to_idx:
+            return self.filler_is_terminal[self.filler_name_to_idx[fname]]
+        # Fallback to slow method if cache not built yet
         return fname in self.get_terminals()
 
     def is_bracketed(self, fname):
@@ -891,6 +895,10 @@ class PCFG():
         a symbol that is a daughter in a non-copy, unary branching rule
         when opts['use_hnf'] is True.'''
 
+        # Use cached lookup if available (O(1) instead of O(n))
+        if hasattr(self, 'filler_name_to_idx') and fname in self.filler_name_to_idx:
+            return self.filler_is_bracketed[self.filler_name_to_idx[fname]]
+        # Fallback to slow method if cache not built yet
         return self.opts['use_hnf'] and \
             (fname in [rule['d1'] for rule in self.rules
                        if (rule['d2'] is None) and
@@ -1802,14 +1810,31 @@ class HarmonicGrammar():
         self._rules_set.add(key)
 
     def _add_additional_rules(self):
+        import time
 
         # {'m': fname_m, 'd1': fname_d1, 'd2': fname_d2 }
         if self.opts['add_copy_rules']:
+            print(f"  Processing {len(self.g.rules)} rules with add_copy_rules...")
+            t0 = time.time()
 
             rules_new = []
             rules_copy = []
+            rules_copy_set = set()  # Fast O(1) lookup to avoid duplicates
 
-            for rule in self.g.rules:
+            def rule_to_tuple(rule):
+                """Convert rule dict to hashable tuple for set operations"""
+                return (rule.get('m'), rule.get('d1'), rule.get('d2'), rule.get('p'))
+
+            total_rules = len(self.g.rules)
+            report_interval = max(1000, total_rules // 100)  # Report every 1% or 1000 rules
+
+            for idx, rule in enumerate(self.g.rules):
+                if idx > 0 and idx % report_interval == 0:
+                    elapsed = time.time() - t0
+                    rate = idx / elapsed if elapsed > 0 else 0
+                    remaining = (total_rules - idx) / rate if rate > 0 else 0
+                    print(f"    Processed {idx}/{total_rules} rules ({100*idx/total_rules:.1f}%) "
+                          f"at {rate:.0f} rules/s, ETA: {remaining:.1f}s")
 
                 m = rule['m']
                 d1 = rule['d1']
@@ -1845,14 +1870,12 @@ class HarmonicGrammar():
                                       'd1': None, 'd2': d2, 'p': None}
                         copy_rule4 = {'m': d2_copy, 'd1': None,
                                       'd2': d2_copy, 'p': None}
-                        if copy_rule1 not in rules_copy:
-                            rules_copy.append(copy_rule1)
-                        if copy_rule2 not in rules_copy:
-                            rules_copy.append(copy_rule2)
-                        if copy_rule3 not in rules_copy:
-                            rules_copy.append(copy_rule3)
-                        if copy_rule4 not in rules_copy:
-                            rules_copy.append(copy_rule4)
+                        # Use set for O(1) duplicate checking instead of O(n)
+                        for copy_rule in [copy_rule1, copy_rule2, copy_rule3, copy_rule4]:
+                            rule_tuple = rule_to_tuple(copy_rule)
+                            if rule_tuple not in rules_copy_set:
+                                rules_copy_set.add(rule_tuple)
+                                rules_copy.append(copy_rule)
 
                     elif self.g.is_terminal(d1) and not self.g.is_terminal(d2):
                         d1_copy = self.get_copy(d1)
@@ -1863,10 +1886,12 @@ class HarmonicGrammar():
                                       'd1': d1, 'd2': None, 'p': None}
                         copy_rule2 = {'m': d1_copy,
                                       'd1': d1_copy, 'd2': None, 'p': None}
-                        if copy_rule1 not in rules_copy:
-                            rules_copy.append(copy_rule1)
-                        if copy_rule2 not in rules_copy:
-                            rules_copy.append(copy_rule2)
+                        # Use set for O(1) duplicate checking instead of O(n)
+                        for copy_rule in [copy_rule1, copy_rule2]:
+                            rule_tuple = rule_to_tuple(copy_rule)
+                            if rule_tuple not in rules_copy_set:
+                                rules_copy_set.add(rule_tuple)
+                                rules_copy.append(copy_rule)
 
                     elif not self.g.is_terminal(d1) and self.g.is_terminal(d2):
                         d2_copy = self.get_copy(d2)
@@ -1877,10 +1902,12 @@ class HarmonicGrammar():
                                       'd1': None, 'd2': d2, 'p': None}
                         copy_rule2 = {'m': d2_copy, 'd1': None,
                                       'd2': d2_copy, 'p': None}
-                        if copy_rule1 not in rules_copy:
-                            rules_copy.append(copy_rule1)
-                        if copy_rule2 not in rules_copy:
-                            rules_copy.append(copy_rule2)
+                        # Use set for O(1) duplicate checking instead of O(n)
+                        for copy_rule in [copy_rule1, copy_rule2]:
+                            rule_tuple = rule_to_tuple(copy_rule)
+                            if rule_tuple not in rules_copy_set:
+                                rules_copy_set.add(rule_tuple)
+                                rules_copy.append(copy_rule)
                     else:
                         rules_new.append(rule)
 
@@ -1888,6 +1915,9 @@ class HarmonicGrammar():
                     rules_new.append(rule)
 
             self.g.rules = rules_new + rules_copy
+            elapsed = time.time() - t0
+            print(f"  Completed add_copy_rules in {elapsed:.2f}s ({len(self.g.rules)} final rules, "
+                  f"{len(self.g.rules)/elapsed:.0f} rules/s avg)")
             self.g._sort_rules()
             self.g._add_names()
             self._add_names()
