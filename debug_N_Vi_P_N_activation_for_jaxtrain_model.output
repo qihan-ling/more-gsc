@@ -1,0 +1,139 @@
+JAX detected - GPU acceleration enabled
+JAX detected - GPU acceleration enabled
+Loading model...
+JAX detected - GPU acceleration enabled
+
+======================================================================
+Debugging treelet construction for role (3,2)
+======================================================================
+
+Daughters of (3,2):
+  l: ['(2,2)']
+  r: ['(2,3)']
+
+Treelet frame: ['(2,2)', '(2,3)', '(3,2)']
+
+Total unique rules: 27
+
+First 20 rules:
+0: NP[1](*N,RC[1])
+1: PP[1](P,N)
+2: RC[1](*Vpp,PP[1])
+3: S[1](N,Vi)
+4: S[2](*N,VP[1])
+5: S[2](*N,VP[2])
+6: S[2](*N,VP[3])
+7: S[3](NP[1],*Vi)
+8: VP[1](*Vi,PP[1])
+9: VP[2](BE,Vpp)
+10: VP[3](*BE,VPpp[1])
+11: VPpp[1](*Vpp,PP[1])
+12: *@(,@)
+13: *@(,*@)
+14: *BE(BE,)
+15: *BE(*BE,)
+16: *N(N,)
+17: *N(*N,)
+18: *Vi(Vi,)
+19: *Vi(*Vi,)
+
+Total treelets at (3,2): 27
+
+First 10 treelets:
+0: ['*N:0/(2,2)', 'RC[1]:1/(2,3)', 'NP[1]:0/(3,2)']
+1: ['P:0/(2,2)', 'N:1/(2,3)', 'PP[1]:1/(3,2)']
+2: ['*Vpp:0/(2,2)', 'PP[1]:1/(2,3)', 'RC[1]:1/(3,2)']
+3: ['N:0/(2,2)', 'Vi:1/(2,3)', 'S[1]:0/(3,2)']
+4: ['*N:0/(2,2)', 'VP[1]:1/(2,3)', 'S[2]:0/(3,2)']
+5: ['*N:0/(2,2)', 'VP[2]:1/(2,3)', 'S[2]:0/(3,2)']
+6: ['*N:0/(2,2)', 'VP[3]:1/(2,3)', 'S[2]:0/(3,2)']
+7: ['NP[1]:0/(2,2)', '*Vi:1/(2,3)', 'S[3]:0/(3,2)']
+8: ['*Vi:0/(2,2)', 'PP[1]:1/(2,3)', 'VP[1]:1/(3,2)']
+9: ['BE:0/(2,2)', 'Vpp:1/(2,3)', 'VP[2]:1/(3,2)']
+
+======================================================================
+Checking if treelet bindings exist in binding_names:
+======================================================================
+
+Treelet 0: ['*N:0/(2,2)', 'RC[1]:1/(2,3)', 'NP[1]:0/(3,2)']
+  Binding indices: [165, 203, 281]
+  Actual binding names: ['*N:0/(2,2)', 'RC[1]:1/(2,3)', 'NP[1]:0/(3,2)']
+
+Treelet 1: ['P:0/(2,2)', 'N:1/(2,3)', 'PP[1]:1/(3,2)']
+  Binding indices: [174, 199, 283]
+  Actual binding names: ['P:0/(2,2)', 'N:1/(2,3)', 'PP[1]:1/(3,2)']
+
+Treelet 2: ['*Vpp:0/(2,2)', 'PP[1]:1/(2,3)', 'RC[1]:1/(3,2)']
+  Binding indices: [168, 202, 284]
+  Actual binding names: ['*Vpp:0/(2,2)', 'PP[1]:1/(2,3)', 'RC[1]:1/(3,2)']
+
+Treelet 3: ['N:0/(2,2)', 'Vi:1/(2,3)', 'S[1]:0/(3,2)']
+  Binding indices: [171, 212, 285]
+  Actual binding names: ['N:0/(2,2)', 'Vi:1/(2,3)', 'S[1]:0/(3,2)']
+
+Treelet 4: ['*N:0/(2,2)', 'VP[1]:1/(2,3)', 'S[2]:0/(3,2)']
+  Binding indices: [165, 207, 286]
+  Actual binding names: ['*N:0/(2,2)', 'VP[1]:1/(2,3)', 'S[2]:0/(3,2)']
+
+Treelet 5: ['*N:0/(2,2)', 'VP[2]:1/(2,3)', 'S[2]:0/(3,2)']
+  Binding indices: [165, 208, 286]
+  Actual binding names: ['*N:0/(2,2)', 'VP[2]:1/(2,3)', 'S[2]:0/(3,2)']
+
+Treelet 6: ['*N:0/(2,2)', 'VP[3]:1/(2,3)', 'S[2]:0/(3,2)']
+  Binding indices: [165, 209, 286]
+  Actual binding names: ['*N:0/(2,2)', 'VP[3]:1/(2,3)', 'S[2]:0/(3,2)']
+
+Treelet 7: ['NP[1]:0/(2,2)', '*Vi:1/(2,3)', 'S[3]:0/(3,2)']
+  Binding indices: [173, 194, 287]
+  Actual binding names: ['NP[1]:0/(2,2)', '*Vi:1/(2,3)', 'S[3]:0/(3,2)']
+
+Treelet 8: ['*Vi:0/(2,2)', 'PP[1]:1/(2,3)', 'VP[1]:1/(3,2)']
+  Binding indices: [166, 202, 288]
+  Actual binding names: ['*Vi:0/(2,2)', 'PP[1]:1/(2,3)', 'VP[1]:1/(3,2)']
+
+Treelet 9: ['BE:0/(2,2)', 'Vpp:1/(2,3)', 'VP[2]:1/(3,2)']
+  Binding indices: [170, 214, 289]
+  Actual binding names: ['BE:0/(2,2)', 'Vpp:1/(2,3)', 'VP[2]:1/(3,2)']
+Found S1 at index 1
+
+======================================================================
+Computing treelet activations for role (3,2)
+======================================================================
+
+Top 4 treelets by activation sum:
+
+1. Rule index 8: VP[1](*Vi,PP[1])
+   Total activation: 2453.564453
+   Rule details: m=VP[1]:1, d1=*Vi:0, d2=PP[1]:1
+   Treelet: ['*Vi:0/(2,2)', 'PP[1]:1/(2,3)', 'VP[1]:1/(3,2)']
+   Binding indices: [166, 202, 288]
+   Actual bindings: ['*Vi:0/(2,2)', 'PP[1]:1/(2,3)', 'VP[1]:1/(3,2)']
+   Final activations: [0.9859509 1.0078698 0.967639 ]
+
+2. Rule index 19: *Vi(*Vi,)
+   Total activation: 1400.178467
+   Rule details: m=*Vi:0, d1=*Vi:0, d2=None
+   Treelet: ['*Vi:0/(2,2)', '*Vi:0/(3,2)']
+   Binding indices: [166, 274]
+   Actual bindings: ['*Vi:0/(2,2)', '*Vi:0/(3,2)']
+   Final activations: [0.9859509  0.07625564]
+
+3. Rule index 2: RC[1](*Vpp,PP[1])
+   Total activation: 1154.865967
+   Rule details: m=RC[1]:1, d1=*Vpp:0, d2=PP[1]:1
+   Treelet: ['*Vpp:0/(2,2)', 'PP[1]:1/(2,3)', 'RC[1]:1/(3,2)']
+   Binding indices: [168, 202, 284]
+   Actual bindings: ['*Vpp:0/(2,2)', 'PP[1]:1/(2,3)', 'RC[1]:1/(3,2)']
+   Final activations: [0.04297128 1.0078698  0.14119387]
+
+4. Rule index 11: VPpp[1](*Vpp,PP[1])
+   Total activation: 1104.092163
+   Rule details: m=VPpp[1]:1, d1=*Vpp:0, d2=PP[1]:1
+   Treelet: ['*Vpp:0/(2,2)', 'PP[1]:1/(2,3)', 'VPpp[1]:1/(3,2)']
+   Binding indices: [168, 202, 291]
+   Actual bindings: ['*Vpp:0/(2,2)', 'PP[1]:1/(2,3)', 'VPpp[1]:1/(3,2)']
+   Final activations: [0.04297128 1.0078698  0.07720622]
+
+======================================================================
+Expected from paper: VP[1](*Vi,PP[1]), *Vi(*Vi,), RC[1](*Vpp,PP[1]), VPpp[1](*Vpp,PP[1])
+======================================================================
