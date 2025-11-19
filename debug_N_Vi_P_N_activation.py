@@ -129,6 +129,9 @@ targ = net.corpus['target'][s1_idx]
 
 words = [bname.split('/')[0] for bname in sent]
 
+# Set random seed to match plotting function for reproducibility
+np.random.seed(1024 + s1_idx)
+
 net.reset(mu=net.ep, sd=0.01)
 
 net.initialize_traces(trace_list='all')

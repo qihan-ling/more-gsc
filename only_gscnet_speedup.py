@@ -336,17 +336,27 @@ def plot_treelet_act_trace(
     labs = create_rule_labels(rules, add_prob=add_prob,
                               suppress_pos=suppress_pos)
     print(f"labs are {labs}")
-    idx = (net.traces['t'] >= tmin) * (net.traces['t'] <= tmax)
-    actC_trace = net.traces['actC'][idx, :]
-    dp_all = compute_treelet_act_trace(net, actC_trace, rules, rname)
 
-    temp = np.argsort(dp_all.sum(axis=0))
+    # FIX: Use FULL trace to determine which treelets are most active
+    # This ensures consistency with debug script
+    actC_trace_full = net.traces['actC']
+    dp_all_full = compute_treelet_act_trace(net, actC_trace_full, rules, rname)
+
+    # Determine focus treelets based on FULL trace activation
+    temp = np.argsort(dp_all_full.sum(axis=0))
     focus_idx = temp[::-1][:num_treelets]
     print(f"focus_idx is {focus_idx}")
     labs_focus = [labs[ii] for ii in focus_idx]
     print(f"labs_focus is {labs_focus}")
+
+    # Filter trace for PLOTTING only (to zoom in on time window)
+    idx = (net.traces['t'] >= tmin) * (net.traces['t'] <= tmax)
+    actC_trace_plot = net.traces['actC'][idx, :]
+    dp_all_plot = compute_treelet_act_trace(net, actC_trace_plot, rules, rname)
+
+    # Plot using the filtered trace but with focus_idx determined from full trace
     plt.plot(net.traces['t'][idx][::downsampling],
-             dp_all[::downsampling, focus_idx])
+             dp_all_plot[::downsampling, focus_idx])
     if legend_pos is not None:
         plt.legend(labs_focus, loc=legend_pos)
     else:
