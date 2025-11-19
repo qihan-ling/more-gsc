@@ -2157,6 +2157,9 @@ class GscNet():
         if self.use_jax:
             self.q = self.opts['q_init'] * \
                 jnp.ones(self.num_roles, dtype=jnp.float32)
+            # Reset JAX random key to respect np.random.seed() calls
+            # Use current numpy random state to generate a new JAX key
+            self.rng_key = jax.random.PRNGKey(np.random.randint(0, 2**31))
         else:
             self.q = self.opts['q_init'] * np.ones(self.num_roles)
         self.T = self.opts['T_init']
