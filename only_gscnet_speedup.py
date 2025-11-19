@@ -2038,22 +2038,48 @@ class GscNet():
 
         idx1 = self.find_bindings_fast(bname1)
         idx2 = self.find_bindings_fast(bname2)
+
+        # For sparse matrices, we need special handling
+        is_sparse = hasattr(self, 'use_sparse') and self.use_sparse
+
         if not cumulative:
             if symmetric:
-                self.WC[idx1, idx2] = self.WC[idx2, idx1] = weight
+                if is_sparse:
+                    # Sparse: set each element individually
+                    for i in idx1:
+                        for j in idx2:
+                            self.WC[i, j] = weight
+                            self.WC[j, i] = weight
+                else:
+                    # Dense: can use fancy indexing
+                    self.WC[idx1, idx2] = self.WC[idx2, idx1] = weight
             else:
-                self.WC[idx2, idx1] = weight
+                if is_sparse:
+                    for i in idx2:
+                        for j in idx1:
+                            self.WC[i, j] = weight
+                else:
+                    self.WC[idx2, idx1] = weight
         else:
-            # WC = np.zeros(self.WC.shape)
+            # Cumulative update
             if symmetric:
-                # WC[idx1, idx2] = WC[idx2, idx1] = weight
-                # self.WC += WC
-                self.WC[idx1, idx2] += weight
-                self.WC[idx2, idx1] += weight
+                if is_sparse:
+                    # Sparse: accumulate each element individually
+                    for i in idx1:
+                        for j in idx2:
+                            self.WC[i, j] = self.WC[i, j] + weight
+                            self.WC[j, i] = self.WC[j, i] + weight
+                else:
+                    # Dense: can use fancy indexing with +=
+                    self.WC[idx1, idx2] += weight
+                    self.WC[idx2, idx1] += weight
             else:
-                # WC[idx2, idx1] = weight
-                # self.WC += WC
-                self.WC[idx2, idx1] += weight
+                if is_sparse:
+                    for i in idx2:
+                        for j in idx1:
+                            self.WC[i, j] = self.WC[i, j] + weight
+                else:
+                    self.WC[idx2, idx1] += weight
 
         if c2n:
             self._set_weights()
