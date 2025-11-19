@@ -6,6 +6,12 @@ import copy
 import pickle
 import matplotlib.pyplot as plt
 try:
+    from scipy import sparse
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("Warning: scipy not available - sparse matrices disabled")
+try:
     import jax
     import jax.numpy as jnp
     from jax import vmap, jit
@@ -1070,7 +1076,19 @@ class GscNet():
             # self._precompute_fast_lookups()
             self._precompute_fastER_lookups()
         # Add parameters ==========================================
+        # Auto-detect sparse matrix need
+        if self.opts['use_sparse_wc'] is None:
+            self.opts['use_sparse_wc'] = (
+                self.num_bindings > self.opts['sparse_wc_threshold'] and
+                SCIPY_AVAILABLE and
+                not self.use_jax  # Sparse not yet supported with JAX
+            )
+
         if self.use_jax:
+            if self.opts['use_sparse_wc']:
+                sys.exit("ERROR: Sparse WC matrices not yet supported with JAX. "
+                         "Please use CPU mode (use_jax=False) for large grammars.")
+
             print("Initializing parameters on GPU with JAX...")
             # Use float32 for GPU efficiency (good balance of speed/precision)
             self.WC = jnp.zeros(
@@ -1099,22 +1117,48 @@ class GscNet():
             print(f"  ✓ Memory: {self.WC.nbytes / 1e9:.2f} GB")
         else:
             print("Initializing parameters on CPU with NumPy...")
-            self.WC = np.zeros((self.num_bindings, self.num_bindings))
+
+            # Use sparse matrix for large grammars
+            if self.opts['use_sparse_wc']:
+                dense_size_gb = self.num_bindings ** 2 * 8 / 1e9
+                print(f"  Large grammar detected ({self.num_bindings} bindings)")
+                print(f"  Dense WC would be {dense_size_gb:.1f} GB - using SPARSE matrix!")
+                self.WC = sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64)
+                self.use_sparse = True
+            else:
+                self.WC = np.zeros((self.num_bindings, self.num_bindings))
+                self.use_sparse = False
+
             self.bC = np.zeros(self.num_bindings)
             self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
 
             # Initialize Adam states on CPU
-            self.optim = {
-                'M_WC': np.zeros_like(self.WC),
-                'R_WC': np.zeros_like(self.WC),
-                'M_bC': np.zeros_like(self.bC),
-                'R_bC': np.zeros_like(self.bC),
-                'step_WC': 0,
-                'step_bC': 0,
-                'beta1': 0.9,
-                'beta2': 0.999,
-                'eps': 1e-8
-            }
+            if self.opts['use_sparse_wc']:
+                # Sparse optimizer states
+                print("  Initializing sparse optimizer states...")
+                self.optim = {
+                    'M_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
+                    'R_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
+                    'M_bC': np.zeros(self.num_bindings),
+                    'R_bC': np.zeros(self.num_bindings),
+                    'step_WC': 0,
+                    'step_bC': 0,
+                    'beta1': 0.9,
+                    'beta2': 0.999,
+                    'eps': 1e-8
+                }
+            else:
+                self.optim = {
+                    'M_WC': np.zeros_like(self.WC),
+                    'R_WC': np.zeros_like(self.WC),
+                    'M_bC': np.zeros_like(self.bC),
+                    'R_bC': np.zeros_like(self.bC),
+                    'step_WC': 0,
+                    'step_bC': 0,
+                    'beta1': 0.9,
+                    'beta2': 0.999,
+                    'eps': 1e-8
+                }
         ############ ORIGINAL CODE COMMENTED OUT#######
         # self.WC = np.zeros((self.num_bindings, self.num_bindings))
         # self.bC = np.zeros(self.num_bindings)
@@ -1124,6 +1168,22 @@ class GscNet():
             self._adjust_default_param_vals()
             if self.opts['use_second_order_bias']:
                 self.bias2weight()
+
+            # Convert sparse matrices to CSR format for efficient operations
+            if self.opts['use_sparse_wc']:
+                print("  Converting sparse matrices to CSR format...")
+                self.WC = self.WC.tocsr()
+                self.optim['M_WC'] = self.optim['M_WC'].tocsr()
+                self.optim['R_WC'] = self.optim['R_WC'].tocsr()
+                nnz = self.WC.nnz
+                total = self.num_bindings ** 2
+                sparsity = 100 * (1 - nnz / total)
+                memory_dense_gb = total * 8 / 1e9
+                memory_sparse_mb = (nnz * (8 + 8)) / 1e6  # value + indices
+                print(f"  ✓ WC sparsity: {sparsity:.4f}% ({nnz:,} non-zero out of {total:,})")
+                print(f"  ✓ Memory saved: {memory_dense_gb:.1f} GB (dense) → {memory_sparse_mb:.1f} MB (sparse)")
+                print(f"  ✓ Reduction: {memory_dense_gb * 1000 / memory_sparse_mb:.0f}x")
+
         dur = time.time() - t0
         print('{} s for initializing parameter values'.format(dur))
 
@@ -1520,6 +1580,11 @@ class GscNet():
         self.opts['penalize_root_posN'] = True
         # JAX default
         self.opts['use_jax'] = JAX_AVAILABLE
+
+        # Sparse matrix support for large grammars
+        # Will be auto-enabled if num_bindings > 100,000
+        self.opts['use_sparse_wc'] = None  # None = auto-detect
+        self.opts['sparse_wc_threshold'] = 100000  # Threshold for auto-enabling sparse
 
     def _update_opts(self, opts):
         # Update opts
