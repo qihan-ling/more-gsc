@@ -1147,33 +1147,8 @@ class GscNet():
             self.bC = np.zeros(self.num_bindings)
             self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
 
-            # Initialize Adam states on CPU
-            if self.opts['use_sparse_wc']:
-                # Sparse optimizer states
-                print("  Initializing sparse optimizer states...")
-                self.optim = {
-                    'M_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
-                    'R_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
-                    'M_bC': np.zeros(self.num_bindings),
-                    'R_bC': np.zeros(self.num_bindings),
-                    'step_WC': 0,
-                    'step_bC': 0,
-                    'beta1': 0.9,
-                    'beta2': 0.999,
-                    'eps': 1e-8
-                }
-            else:
-                self.optim = {
-                    'M_WC': np.zeros_like(self.WC),
-                    'R_WC': np.zeros_like(self.WC),
-                    'M_bC': np.zeros_like(self.bC),
-                    'R_bC': np.zeros_like(self.bC),
-                    'step_WC': 0,
-                    'step_bC': 0,
-                    'beta1': 0.9,
-                    'beta2': 0.999,
-                    'eps': 1e-8
-                }
+            # Optimizer states will be initialized in initialize() method
+            # to avoid OOM during model construction
         ############ ORIGINAL CODE COMMENTED OUT#######
         # self.WC = np.zeros((self.num_bindings, self.num_bindings))
         # self.bC = np.zeros(self.num_bindings)
@@ -1186,12 +1161,10 @@ class GscNet():
             if self.opts['use_second_order_bias']:
                 print("DEBUG: bias2weight starts")
                 self.bias2weight()
-            # Convert sparse matrices to CSR format for efficient operations
+            # Convert sparse WC matrix to CSR format for efficient operations
             if self.opts['use_sparse_wc']:
-                print("  Converting sparse matrices to CSR format...")
+                print("  Converting WC matrix to CSR format...")
                 self.WC = self.WC.tocsr()
-                self.optim['M_WC'] = self.optim['M_WC'].tocsr()
-                self.optim['R_WC'] = self.optim['R_WC'].tocsr()
                 nnz = self.WC.nnz
                 total = self.num_bindings ** 2
                 sparsity = 100 * (1 - nnz / total)
@@ -3028,10 +3001,22 @@ class GscNet():
 
         if self.train_opts['optimizer'] == 'adam':
             self.optim = {}
-            self.optim['M_WC'] = np.zeros_like(self.WC)
+            # Handle sparse matrices properly
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse matrices, create sparse optimizer states
+                print("  Initializing sparse optimizer states for Adam...")
+                from scipy import sparse
+                # Use CSR format directly for efficiency (WC is already in CSR format)
+                self.optim['M_WC'] = sparse.csr_matrix(self.WC.shape, dtype=np.float64)
+                self.optim['R_WC'] = sparse.csr_matrix(self.WC.shape, dtype=np.float64)
+            else:
+                # Dense matrices
+                self.optim['M_WC'] = np.zeros_like(self.WC)
+                self.optim['R_WC'] = np.zeros_like(self.WC)
             self.optim['M_bC'] = np.zeros_like(self.bC)
-            self.optim['R_WC'] = np.zeros_like(self.WC)
             self.optim['R_bC'] = np.zeros_like(self.bC)
+            self.optim['step_WC'] = 0
+            self.optim['step_bC'] = 0
             self.optim['beta1'] = .9
             self.optim['beta2'] = .999
             self.optim['eps'] = 1e-8
