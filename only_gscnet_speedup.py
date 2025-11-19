@@ -1755,7 +1755,9 @@ class GscNet():
         H_nonterminal_illegitimate = self.hg.opts['H_nonterminal_illegitimate']
         H_copy_illegitimate = self.hg.opts['H_copy_illegitimate']
 
-        self.WC = np.zeros((self.num_bindings, self.num_bindings))
+        # WC already initialized in __init__ (either dense or sparse)
+        # Don't recreate it here!
+        # self.WC = np.zeros((self.num_bindings, self.num_bindings))
 
         # t1 = time.time()
         # Binary and copy rules =========================
@@ -2078,7 +2080,19 @@ class GscNet():
     def bias2weight(self):
         '''Set recurrent weights given bias values in conceptual coordinates'''
 
-        self.WC = self.WC + np.diag(2 * self.bC)
+        # Add diagonal - works for both dense and sparse matrices
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            # Sparse matrix: add to diagonal efficiently
+            diag_values = 2 * self.bC
+            # Convert to lil for efficient diagonal modification
+            if not sparse.isspmatrix_lil(self.WC):
+                self.WC = self.WC.tolil()
+            # Add to existing diagonal
+            self.WC.setdiag(self.WC.diagonal() + diag_values)
+        else:
+            # Dense matrix: standard numpy operation
+            self.WC = self.WC + np.diag(2 * self.bC)
+
         self.bC = np.zeros(self.num_bindings)
         self._set_weights()
         self._set_biases()
@@ -3006,7 +3020,11 @@ class GscNet():
         else:
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
-            mask0 = np.zeros(self.WC.shape)
+            # Use sparse zeros for sparse WC
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                mask0 = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+            else:
+                mask0 = np.zeros(self.WC.shape)
             # for role in self.role_names:
             #     idx = self.find_roles(role)
             #     mask0[np.ix_(idx, idx)] = 1.
@@ -3081,7 +3099,11 @@ class GscNet():
                 destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
                 dqpolicy = jnp.zeros(self.qpolicy.shape, dtype=jnp.float32)
             else:
-                dWC = np.zeros(self.WC.shape)
+                # For sparse WC, use sparse gradient accumulator
+                if hasattr(self, 'use_sparse') and self.use_sparse:
+                    dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                else:
+                    dWC = np.zeros(self.WC.shape)
                 dbC = np.zeros(self.bC.shape)
                 destr = np.zeros(self.estr.shape)
                 dqpolicy = np.zeros(self.qpolicy.shape)
@@ -3283,7 +3305,11 @@ class GscNet():
                         self.train_opts['weight_decay_factor'] * \
                         (self.WC - ref)
                 else:
-                    weight_decay = np.zeros(self.WC.shape)
+                    # Use sparse zeros for sparse WC
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        weight_decay = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                    else:
+                        weight_decay = np.zeros(self.WC.shape)
 
                 if not (('bias2_only' in self.train_opts) and self.train_opts['bias2_only']):
                     if self.train_opts['optimizer'] == 'adam':
@@ -3901,7 +3927,11 @@ class GscNet():
             destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
             dq = jnp.zeros(self.num_roles, dtype=jnp.float32)
         else:
-            dWC = np.zeros(self.WC.shape)
+            # For sparse WC, use sparse gradient accumulator
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+            else:
+                dWC = np.zeros(self.WC.shape)
             dbC = np.zeros(self.bC.shape)
             destr = np.zeros(self.estr.shape)
             dq = np.zeros(self.num_roles)
@@ -4222,7 +4252,11 @@ class GscNet():
         WC_R /= float(count_R)
         WC_S /= float(count_S)
 
-        WC_avg = np.zeros(self.WC.shape)
+        # Use sparse zeros for sparse WC
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            WC_avg = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+        else:
+            WC_avg = np.zeros(self.WC.shape)
 
         # for role in self.role_names:
         #     if not self.hg.roles.is_terminal(role):
@@ -4312,8 +4346,22 @@ class GscNet():
 
         if self.opts['use_second_order_bias']:
 
-            bC = np.diag(self.WC).copy()
-            WC0 = self.WC - np.diag(bC)
+            # Extract diagonal - works for both dense and sparse
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                bC = self.WC.diagonal().copy()
+            else:
+                bC = np.diag(self.WC).copy()
+
+            # Subtract diagonal - works for both dense and sparse
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # Sparse: set diagonal to zero
+                WC0 = self.WC.copy()
+                if not sparse.isspmatrix_lil(WC0):
+                    WC0 = WC0.tolil()
+                WC0.setdiag(0)
+            else:
+                # Dense: standard subtraction
+                WC0 = self.WC - np.diag(bC)
 
             # bC = np.tile(self.vec2mat(bC).mean(axis=1), self.num_roles)
             # self.WC = WC0 + np.diag(bC)
@@ -4355,7 +4403,17 @@ class GscNet():
                 if self.hg.opts['add1_to_root']:
                     bC_new[rid] += 2.
 
-            self.WC = WC0 + np.diag(bC_new)
+            # Add new diagonal - works for both dense and sparse
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # Sparse: set new diagonal
+                if not sparse.isspmatrix_lil(WC0):
+                    WC0 = WC0.tolil()
+                WC0.setdiag(bC_new)
+                self.WC = WC0
+            else:
+                # Dense: standard addition
+                self.WC = WC0 + np.diag(bC_new)
+
             self._set_weights()
 
         else:
