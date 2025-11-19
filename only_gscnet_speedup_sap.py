@@ -1683,14 +1683,32 @@ class GscNet():
         We never materialize S - instead compute C @ (C.T @ v) on-the-fly.
         """
 
+        import time
         print("Computing change-of-basis matrices...")
+        print(f"  F shape: {self.F.shape}, R shape: {self.R.shape}")
 
-        # Compute N and C (these are manageable sizes)
+        # Compute N and C
+        t0 = time.time()
         N = np.kron(self.R, self.F)
-        if N.shape[0] == N.shape[1]:
-            C = np.linalg.inv(N)
-        else:
-            C = np.linalg.pinv(N)
+        print(f"  N shape: {N.shape} ({N.shape[0] * N.shape[1] * 8 / 1e9:.2f} GB)")
+        print(f"  Kronecker product took {time.time() - t0:.2f} s")
+
+        # Compute pseudo-inverse efficiently using Kronecker product property
+        # OPTIMIZATION: pinv(kron(R, F)) = kron(pinv(R), pinv(F))
+        # This is MUCH faster for large grammars!
+        t0 = time.time()
+        print(f"  Computing pseudo-inverse using fast Kronecker decomposition...")
+
+        # Compute pinv of small matrices R and F separately
+        R_pinv = np.linalg.pinv(self.R, rcond=1e-10)
+        F_pinv = np.linalg.pinv(self.F, rcond=1e-10)
+
+        # Reconstruct C using Kronecker product (much faster!)
+        C = np.kron(R_pinv, F_pinv)
+
+        dur = time.time() - t0
+        print(f"  Fast pseudo-inverse took {dur:.2f} s (vs. minutes for direct method)")
+        print(f"  C shape: {C.shape}")
 
         self.N = N
         self.C = C
