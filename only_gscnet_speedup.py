@@ -3249,8 +3249,13 @@ class GscNet():
                         (self.num_bindings, self.num_bindings), dtype=jnp.float32)
                 else:
                     maskbC_update = np.zeros(self.num_bindings)
-                    maskWC_update = np.zeros(
-                        (self.num_bindings, self.num_bindings))
+                    # Use sparse mask for sparse WC
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        maskWC_update = sparse.lil_matrix(
+                            (self.num_bindings, self.num_bindings), dtype=np.float64)
+                    else:
+                        maskWC_update = np.zeros(
+                            (self.num_bindings, self.num_bindings))
                 idx = np.concatenate([self.role_to_binding_indices[rid]
                                       for rid in role_idx_list])
                 if self.use_jax:
@@ -3288,9 +3293,15 @@ class GscNet():
                     maskbC_update = jnp.ones(
                         self.num_bindings, dtype=jnp.float32)
                 else:
-                    maskWC_update = np.ones(
-                        (self.num_bindings, self.num_bindings))
-                    maskbC_update = np.ones(self.num_bindings)
+                    # For sparse matrices, avoid creating 2.85 TB mask of all ones
+                    # Instead, set mask to None and check later
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        maskWC_update = None  # No mask needed (all ones = no masking)
+                        maskbC_update = np.ones(self.num_bindings)
+                    else:
+                        maskWC_update = np.ones(
+                            (self.num_bindings, self.num_bindings))
+                        maskbC_update = np.ones(self.num_bindings)
             if self.train_opts['update_w']:
                 # print('epoch num=', epi, destr)
 
@@ -3340,19 +3351,40 @@ class GscNet():
                             self.optim['M_WC'] = self.optim['beta1'] * \
                                 self.optim['M_WC'] + \
                                 (1. - self.optim['beta1']) * dWC
+
+                            # Element-wise square - works with sparse
+                            if hasattr(self, 'use_sparse') and self.use_sparse:
+                                dWC_squared = dWC.power(2)  # Sparse-compatible power
+                            else:
+                                dWC_squared = dWC**2
+
                             self.optim['R_WC'] = self.optim['beta2'] * \
                                 self.optim['R_WC'] + \
-                                (1. - self.optim['beta2']) * dWC**2
+                                (1. - self.optim['beta2']) * dWC_squared
+
                             m_k_hat_WC = self.optim['M_WC'] / \
                                 (1. - self.optim['beta1']**self.epoch_num)
                             r_k_hat_WC = self.optim['R_WC'] / \
                                 (1. - self.optim['beta2']**self.epoch_num)
+
+                            # Sparse sqrt - use power(0.5) which is sparse-compatible
+                            if hasattr(self, 'use_sparse') and self.use_sparse:
+                                r_k_hat_WC_sqrt = r_k_hat_WC.power(0.5)  # Sparse sqrt via power
+                            else:
+                                r_k_hat_WC_sqrt = np.sqrt(r_k_hat_WC)
+
                             self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
-                                (np.sqrt(r_k_hat_WC) + self.optim['eps'])
+                                (r_k_hat_WC_sqrt + self.optim['eps'])
                         self._set_weights()
                     else:
-                        self.WC += self.train_opts['lrate'] * \
-                            (dWC + weight_decay) * maskWC_update
+                        # SGD update - handle sparse mask
+                        if maskWC_update is None:
+                            # No mask (all ones) - apply update directly
+                            self.WC += self.train_opts['lrate'] * (dWC + weight_decay)
+                        else:
+                            # Apply mask
+                            self.WC += self.train_opts['lrate'] * \
+                                (dWC + weight_decay) * maskWC_update
                         self._set_weights()
 
                 if self.train_opts['bias1_only']:
