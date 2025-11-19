@@ -6,6 +6,12 @@ import copy
 import pickle
 import matplotlib.pyplot as plt
 try:
+    from scipy import sparse
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
+    print("Warning: scipy not available - sparse matrices disabled")
+try:
     import jax
     import jax.numpy as jnp
     from jax import vmap, jit
@@ -122,15 +128,15 @@ def encode_symbols(num_symbols, coord='dist', dp=0., dim=None, seed=None):
             dim = num_symbols
         else:
             if dim < num_symbols:
-                message = ("The [dim] value must be same as or "
-                           "greater than the [num_symbols] value.")
-                sys.exit(message)
-                # print(
-                #     f"  Warning: Using dim={dim} < num_symbols={num_symbols}")
-                # print(
-                #     f"  This creates a compressed representation to avoid memory issues.")
-                # print(
-                #     f"  The optimization will try to approximate similarity structure in lower dimensions.")
+                # message = ("The [dim] value must be same as or "
+                #            "greater than the [num_symbols] value.")
+                # sys.exit(message)
+                print(
+                    f"  Warning: Using dim={dim} < num_symbols={num_symbols}")
+                print(
+                    f"  This creates a compressed representation to avoid memory issues.")
+                print(
+                    f"  The optimization will try to approximate similarity structure in lower dimensions.")
 
         if isinstance(dp, numbers.Number):
             # if dp is number, convert it to a 2d NumPy array in which
@@ -185,48 +191,48 @@ def dot_products(dp_mat, dim, max_iter=100000, seed=None, tol=1e-6):
     # TOL = 1e-6
     num_symbols = dp_mat.shape[0]
 
-    if dim < num_symbols:
-        sys.exit('dim must be equal to or greater than num_symbols.')
+    # if dim < num_symbols:
+    #     sys.exit('dim must be equal to or greater than num_symbols.')
 
     if seed is not None:
         np.random.seed(seed)
 
     # SPECIAL CASE: Orthogonal encodings (dp=0 off-diagonal) with dim < num_symbols
     # This is common for large grammars where memory is limited
-    # is_orthogonal = np.allclose(dp_mat, np.eye(num_symbols))
+    is_orthogonal = np.allclose(dp_mat, np.eye(num_symbols))
 
-    # if dim < num_symbols:
-    #     if is_orthogonal:
-    #         # For orthogonal case: use random unit vectors in lower dimensions
-    #         # They won't be perfectly orthogonal but will be approximately so
-    #         print(
-    #             f"  Using approximate orthogonal encodings: {dim}D for {num_symbols} symbols")
-    #         print(
-    #             f"  Memory saved: {(num_symbols**2 - dim**2) * 8 / 1e9:.2f} GB per matrix")
+    if dim < num_symbols:
+        if is_orthogonal:
+            # For orthogonal case: use random unit vectors in lower dimensions
+            # They won't be perfectly orthogonal but will be approximately so
+            print(
+                f"  Using approximate orthogonal encodings: {dim}D for {num_symbols} symbols")
+            print(
+                f"  Memory saved: {(num_symbols**2 - dim**2) * 8 / 1e9:.2f} GB per matrix")
 
-    #         sym_mat = np.random.randn(dim, num_symbols)
-    #         # Normalize columns to unit length
-    #         sym_mat = sym_mat / np.linalg.norm(sym_mat, axis=0, keepdims=True)
+            sym_mat = np.random.randn(dim, num_symbols)
+            # Normalize columns to unit length
+            sym_mat = sym_mat / np.linalg.norm(sym_mat, axis=0, keepdims=True)
 
-    #         # Report approximation quality
-    #         actual_dp = sym_mat.T.dot(sym_mat)
-    #         max_off_diag = np.max(
-    #             np.abs(actual_dp - np.diag(np.diag(actual_dp))))
-    #         print(
-    #             f"  Approximation quality: max off-diagonal dot product = {max_off_diag:.4f}")
+            # Report approximation quality
+            actual_dp = sym_mat.T.dot(sym_mat)
+            max_off_diag = np.max(
+                np.abs(actual_dp - np.diag(np.diag(actual_dp))))
+            print(
+                f"  Approximation quality: max off-diagonal dot product = {max_off_diag:.4f}")
 
-    #         return sym_mat
-    #     else:
-    #         # Non-orthogonal case with dim < num_symbols: use random projection
-    #         print(
-    #             f"  Warning: Using random projection for dim={dim} < num_symbols={num_symbols}")
-    #         print(f"  Similarity structure will be approximated, not exact.")
+            return sym_mat
+        else:
+            # Non-orthogonal case with dim < num_symbols: use random projection
+            print(
+                f"  Warning: Using random projection for dim={dim} < num_symbols={num_symbols}")
+            print(f"  Similarity structure will be approximated, not exact.")
 
-    #         # Use random projection - won't match dp_mat exactly but is the best we can do
-    #         sym_mat = np.random.randn(dim, num_symbols)
-    #         sym_mat = sym_mat / np.linalg.norm(sym_mat, axis=0, keepdims=True)
+            # Use random projection - won't match dp_mat exactly but is the best we can do
+            sym_mat = np.random.randn(dim, num_symbols)
+            sym_mat = sym_mat / np.linalg.norm(sym_mat, axis=0, keepdims=True)
 
-    #         return sym_mat
+            return sym_mat
 
     # STANDARD CASE: dim >= num_symbols, exact solution possible
 
@@ -1082,8 +1088,20 @@ class GscNet():
         if self.hg is not None:
             # self._precompute_fast_lookups()
             self._precompute_fastER_lookups()
+        # Auto-detect sparse matrix need
+        if self.opts['use_sparse_wc'] is None:
+            self.opts['use_sparse_wc'] = (
+                self.num_bindings > self.opts['sparse_wc_threshold'] and
+                SCIPY_AVAILABLE and
+                not self.use_jax  # Sparse not yet supported with JAX
+            )
+
         # Add parameters ==========================================
         if self.use_jax:
+            if self.opts['use_sparse_wc']:
+                sys.exit("ERROR: Sparse WC matrices not yet supported with JAX. "
+                         "Please use CPU mode (use_jax=False) for large grammars.")
+
             print("Initializing parameters on GPU with JAX...")
             # Use float32 for GPU efficiency (good balance of speed/precision)
             self.WC = jnp.zeros(
@@ -1112,31 +1130,80 @@ class GscNet():
             print(f"  ✓ Memory: {self.WC.nbytes / 1e9:.2f} GB")
         else:
             print("Initializing parameters on CPU with NumPy...")
-            self.WC = np.zeros((self.num_bindings, self.num_bindings))
+            # Use sparse matrix for large grammars
+            if self.opts['use_sparse_wc']:
+                dense_size_gb = self.num_bindings ** 2 * 8 / 1e9
+                print(
+                    f"  Large grammar detected ({self.num_bindings} bindings)")
+                print(
+                    f"  Dense WC would be {dense_size_gb:.1f} GB - using SPARSE matrix!")
+                self.WC = sparse.lil_matrix(
+                    (self.num_bindings, self.num_bindings), dtype=np.float64)
+                self.use_sparse = True
+            else:
+                self.WC = np.zeros((self.num_bindings, self.num_bindings))
+                self.use_sparse = False
+
             self.bC = np.zeros(self.num_bindings)
             self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
 
             # Initialize Adam states on CPU
-            self.optim = {
-                'M_WC': np.zeros_like(self.WC),
-                'R_WC': np.zeros_like(self.WC),
-                'M_bC': np.zeros_like(self.bC),
-                'R_bC': np.zeros_like(self.bC),
-                'step_WC': 0,
-                'step_bC': 0,
-                'beta1': 0.9,
-                'beta2': 0.999,
-                'eps': 1e-8
-            }
+            if self.opts['use_sparse_wc']:
+                # Sparse optimizer states
+                print("  Initializing sparse optimizer states...")
+                self.optim = {
+                    'M_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
+                    'R_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
+                    'M_bC': np.zeros(self.num_bindings),
+                    'R_bC': np.zeros(self.num_bindings),
+                    'step_WC': 0,
+                    'step_bC': 0,
+                    'beta1': 0.9,
+                    'beta2': 0.999,
+                    'eps': 1e-8
+                }
+            else:
+                self.optim = {
+                    'M_WC': np.zeros_like(self.WC),
+                    'R_WC': np.zeros_like(self.WC),
+                    'M_bC': np.zeros_like(self.bC),
+                    'R_bC': np.zeros_like(self.bC),
+                    'step_WC': 0,
+                    'step_bC': 0,
+                    'beta1': 0.9,
+                    'beta2': 0.999,
+                    'eps': 1e-8
+                }
         ############ ORIGINAL CODE COMMENTED OUT#######
         # self.WC = np.zeros((self.num_bindings, self.num_bindings))
         # self.bC = np.zeros(self.num_bindings)
         # self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
         if hg is not None:
+            print("DEBUG: _build_model starts")
             self._build_model()
+            print("DEBUG: _adjust_default_param_vals starts")
             self._adjust_default_param_vals()
             if self.opts['use_second_order_bias']:
+                print("DEBUG: bias2weight starts")
                 self.bias2weight()
+            # Convert sparse matrices to CSR format for efficient operations
+            if self.opts['use_sparse_wc']:
+                print("  Converting sparse matrices to CSR format...")
+                self.WC = self.WC.tocsr()
+                self.optim['M_WC'] = self.optim['M_WC'].tocsr()
+                self.optim['R_WC'] = self.optim['R_WC'].tocsr()
+                nnz = self.WC.nnz
+                total = self.num_bindings ** 2
+                sparsity = 100 * (1 - nnz / total)
+                memory_dense_gb = total * 8 / 1e9
+                memory_sparse_mb = (nnz * (8 + 8)) / 1e6  # value + indices
+                print(
+                    f"  ✓ WC sparsity: {sparsity:.4f}% ({nnz:,} non-zero out of {total:,})")
+                print(
+                    f"  ✓ Memory saved: {memory_dense_gb:.1f} GB (dense) → {memory_sparse_mb:.1f} MB (sparse)")
+                print(
+                    f"  ✓ Reduction: {memory_dense_gb * 1000 / memory_sparse_mb:.0f}x")
+
         dur = time.time() - t0
         print('{} s for initializing parameter values'.format(dur))
 
@@ -1533,6 +1600,11 @@ class GscNet():
         self.opts['penalize_root_posN'] = True
         # JAX default
         self.opts['use_jax'] = JAX_AVAILABLE
+        # Sparse matrix support for large grammars
+        # Will be auto-enabled if num_bindings > 100,000
+        self.opts['use_sparse_wc'] = None  # None = auto-detect
+        # Threshold for auto-enabling sparse
+        self.opts['sparse_wc_threshold'] = 100000
 
     def _update_opts(self, opts):
         # Update opts
@@ -1703,7 +1775,7 @@ class GscNet():
         H_nonterminal_illegitimate = self.hg.opts['H_nonterminal_illegitimate']
         H_copy_illegitimate = self.hg.opts['H_copy_illegitimate']
 
-        self.WC = np.zeros((self.num_bindings, self.num_bindings))
+        # self.WC = np.zeros((self.num_bindings, self.num_bindings))
 
         # t1 = time.time()
         # Binary and copy rules =========================
@@ -1984,22 +2056,51 @@ class GscNet():
 
         idx1 = self.find_bindings_fast(bname1)
         idx2 = self.find_bindings_fast(bname2)
+        # For sparse matrices, we need special handling
+        is_sparse = hasattr(self, 'use_sparse') and self.use_sparse
+
         if not cumulative:
             if symmetric:
-                self.WC[idx1, idx2] = self.WC[idx2, idx1] = weight
+                if is_sparse:
+                    # Sparse: set each element individually
+                    for i in idx1:
+                        for j in idx2:
+                            self.WC[i, j] = weight
+                            self.WC[j, i] = weight
+                else:
+                    # Dense: can use fancy indexing
+                    self.WC[idx1, idx2] = self.WC[idx2, idx1] = weight
             else:
-                self.WC[idx2, idx1] = weight
+                if is_sparse:
+                    for i in idx2:
+                        for j in idx1:
+                            self.WC[i, j] = weight
+                else:
+                    self.WC[idx2, idx1] = weight
         else:
             # WC = np.zeros(self.WC.shape)
             if symmetric:
                 # WC[idx1, idx2] = WC[idx2, idx1] = weight
                 # self.WC += WC
-                self.WC[idx1, idx2] += weight
-                self.WC[idx2, idx1] += weight
+                if is_sparse:
+                    # Sparse: accumulate each element individually
+                    for i in idx1:
+                        for j in idx2:
+                            self.WC[i, j] = self.WC[i, j] + weight
+                            self.WC[j, i] = self.WC[j, i] + weight
+                else:
+                    # Dense: can use fancy indexing with +=
+                    self.WC[idx1, idx2] += weight
+                    self.WC[idx2, idx1] += weight
             else:
                 # WC[idx2, idx1] = weight
                 # self.WC += WC
-                self.WC[idx2, idx1] += weight
+                if is_sparse:
+                    for i in idx2:
+                        for j in idx1:
+                            self.WC[i, j] = self.WC[i, j] + weight
+                else:
+                    self.WC[idx2, idx1] += weight
 
         if c2n:
             self._set_weights()
@@ -2026,7 +2127,18 @@ class GscNet():
     def bias2weight(self):
         '''Set recurrent weights given bias values in conceptual coordinates'''
 
-        self.WC = self.WC + np.diag(2 * self.bC)
+        # Add diagonal - works for both dense and sparse matrices
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            # Sparse matrix: add to diagonal efficiently
+            diag_values = 2 * self.bC
+            # Convert to lil for efficient diagonal modification
+            if not sparse.isspmatrix_lil(self.WC):
+                self.WC = self.WC.tolil()
+            # Add to existing diagonal
+            self.WC.setdiag(self.WC.diagonal() + diag_values)
+        else:
+            # Dense matrix: standard numpy operation
+            self.WC = self.WC + np.diag(2 * self.bC)
         self.bC = np.zeros(self.num_bindings)
         self._set_weights()
         self._set_biases()
@@ -2954,7 +3066,11 @@ class GscNet():
         else:
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
-            mask0 = np.zeros(self.WC.shape)
+            # Use sparse zeros for sparse WC
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                mask0 = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+            else:
+                mask0 = np.zeros(self.WC.shape)
             # for role in self.role_names:
             #     idx = self.find_roles(role)
             #     mask0[np.ix_(idx, idx)] = 1.
@@ -3029,7 +3145,11 @@ class GscNet():
                 destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
                 dqpolicy = jnp.zeros(self.qpolicy.shape, dtype=jnp.float32)
             else:
-                dWC = np.zeros(self.WC.shape)
+                # For sparse WC, use sparse gradient accumulator
+                if hasattr(self, 'use_sparse') and self.use_sparse:
+                    dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                else:
+                    dWC = np.zeros(self.WC.shape)
                 dbC = np.zeros(self.bC.shape)
                 destr = np.zeros(self.estr.shape)
                 dqpolicy = np.zeros(self.qpolicy.shape)
@@ -3175,8 +3295,13 @@ class GscNet():
                         (self.num_bindings, self.num_bindings), dtype=jnp.float32)
                 else:
                     maskbC_update = np.zeros(self.num_bindings)
-                    maskWC_update = np.zeros(
-                        (self.num_bindings, self.num_bindings))
+                    # Use sparse mask for sparse WC
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        maskWC_update = sparse.lil_matrix(
+                            (self.num_bindings, self.num_bindings), dtype=np.float64)
+                    else:
+                        maskWC_update = np.zeros(
+                            (self.num_bindings, self.num_bindings))
                 idx = np.concatenate([self.role_to_binding_indices[rid]
                                       for rid in role_idx_list])
                 if self.use_jax:
@@ -3214,9 +3339,16 @@ class GscNet():
                     maskbC_update = jnp.ones(
                         self.num_bindings, dtype=jnp.float32)
                 else:
-                    maskWC_update = np.ones(
-                        (self.num_bindings, self.num_bindings))
-                    maskbC_update = np.ones(self.num_bindings)
+                    # For sparse matrices, avoid creating 2.85 TB mask of all ones
+                    # Instead, set mask to None and check later
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        # No mask needed (all ones = no masking)
+                        maskWC_update = None
+                        maskbC_update = np.ones(self.num_bindings)
+                    else:
+                        maskWC_update = np.ones(
+                            (self.num_bindings, self.num_bindings))
+                        maskbC_update = np.ones(self.num_bindings)
             if self.train_opts['update_w']:
                 # print('epoch num=', epi, destr)
 
@@ -3231,7 +3363,12 @@ class GscNet():
                         self.train_opts['weight_decay_factor'] * \
                         (self.WC - ref)
                 else:
-                    weight_decay = np.zeros(self.WC.shape)
+                    # Use sparse zeros for sparse WC
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        weight_decay = sparse.lil_matrix(
+                            self.WC.shape, dtype=np.float64)
+                    else:
+                        weight_decay = np.zeros(self.WC.shape)
 
                 if not (('bias2_only' in self.train_opts) and self.train_opts['bias2_only']):
                     if self.train_opts['optimizer'] == 'adam':
@@ -3262,19 +3399,38 @@ class GscNet():
                             self.optim['M_WC'] = self.optim['beta1'] * \
                                 self.optim['M_WC'] + \
                                 (1. - self.optim['beta1']) * dWC
+                            # Element-wise square - works with sparse
+                            if hasattr(self, 'use_sparse') and self.use_sparse:
+                                # Sparse-compatible power
+                                dWC_squared = dWC.power(2)
+                            else:
+                                dWC_squared = dWC**2
                             self.optim['R_WC'] = self.optim['beta2'] * \
                                 self.optim['R_WC'] + \
-                                (1. - self.optim['beta2']) * dWC**2
+                                (1. - self.optim['beta2']) * dWC_squared
                             m_k_hat_WC = self.optim['M_WC'] / \
                                 (1. - self.optim['beta1']**self.epoch_num)
                             r_k_hat_WC = self.optim['R_WC'] / \
                                 (1. - self.optim['beta2']**self.epoch_num)
+                            # Sparse sqrt - use power(0.5) which is sparse-compatible
+                            if hasattr(self, 'use_sparse') and self.use_sparse:
+                                r_k_hat_WC_sqrt = r_k_hat_WC.power(
+                                    0.5)  # Sparse sqrt via power
+                            else:
+                                r_k_hat_WC_sqrt = np.sqrt(r_k_hat_WC)
                             self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
-                                (np.sqrt(r_k_hat_WC) + self.optim['eps'])
+                                (r_k_hat_WC_sqrt + self.optim['eps'])
                         self._set_weights()
                     else:
-                        self.WC += self.train_opts['lrate'] * \
-                            (dWC + weight_decay) * maskWC_update
+                        # SGD update - handle sparse mask
+                        if maskWC_update is None:
+                            # No mask (all ones) - apply update directly
+                            self.WC += self.train_opts['lrate'] * \
+                                (dWC + weight_decay)
+                        else:
+                            # Apply mask
+                            self.WC += self.train_opts['lrate'] * \
+                                (dWC + weight_decay) * maskWC_update
                         self._set_weights()
 
                 if self.train_opts['bias1_only']:
@@ -3851,7 +4007,11 @@ class GscNet():
             destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
             dq = jnp.zeros(self.num_roles, dtype=jnp.float32)
         else:
-            dWC = np.zeros(self.WC.shape)
+            # For sparse WC, use sparse gradient accumulator
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+            else:
+                dWC = np.zeros(self.WC.shape)
             dbC = np.zeros(self.bC.shape)
             destr = np.zeros(self.estr.shape)
             dq = np.zeros(self.num_roles)
@@ -4172,7 +4332,11 @@ class GscNet():
         WC_R /= float(count_R)
         WC_S /= float(count_S)
 
-        WC_avg = np.zeros(self.WC.shape)
+        # Use sparse zeros for sparse WC
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            WC_avg = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+        else:
+            WC_avg = np.zeros(self.WC.shape)
 
         # for role in self.role_names:
         #     if not self.hg.roles.is_terminal(role):
@@ -4262,8 +4426,22 @@ class GscNet():
 
         if self.opts['use_second_order_bias']:
 
-            bC = np.diag(self.WC).copy()
-            WC0 = self.WC - np.diag(bC)
+            # Extract diagonal - works for both dense and sparse
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                bC = self.WC.diagonal().copy()
+            else:
+                bC = np.diag(self.WC).copy()
+
+            # Subtract diagonal - works for both dense and sparse
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # Sparse: set diagonal to zero
+                WC0 = self.WC.copy()
+                if not sparse.isspmatrix_lil(WC0):
+                    WC0 = WC0.tolil()
+                WC0.setdiag(0)
+            else:
+                # Dense: standard subtraction
+                WC0 = self.WC - np.diag(bC)
 
             # bC = np.tile(self.vec2mat(bC).mean(axis=1), self.num_roles)
             # self.WC = WC0 + np.diag(bC)
@@ -4305,7 +4483,17 @@ class GscNet():
                 if self.hg.opts['add1_to_root']:
                     bC_new[rid] += 2.
 
-            self.WC = WC0 + np.diag(bC_new)
+            # Add new diagonal - works for both dense and sparse
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # Sparse: set new diagonal
+                if not sparse.isspmatrix_lil(WC0):
+                    WC0 = WC0.tolil()
+                WC0.setdiag(bC_new)
+                self.WC = WC0
+            else:
+                # Dense: standard addition
+                self.WC = WC0 + np.diag(bC_new)
+
             self._set_weights()
 
         else:
