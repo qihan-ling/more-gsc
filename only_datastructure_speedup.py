@@ -1569,11 +1569,20 @@ class HarmonicGrammar():
         self._create_roles()
         self._add_names()
         self.rules = []
+        self._rules_set = set()
         self._add_additional_rules()
+        print("Adding binary rules...")
         self._add_binary_rules()
+        print(f"  Binary rules: {len(self.rules)} rules added")
+        print("Adding copy rules...")
         self._add_copy_rules()
+        print(f"  Copy rules: {len(self.rules)} total rules")
+        print("Adding unary rules (this may take a while with large grammars)...")
         self._add_unary_rules()
+        print(f"  Unary rules: {len(self.rules)} total rules")
+        print("Adding expansion rules...")
         self._add_expansion_rules()
+        print(f"  Total rules: {len(self.rules)}")
         print("Optimizing HarmonicGrammar with fast lookups...")
         # Note: g0's fast lookups already created in PCFG.__init__
         # self.g is a deepcopy, so copy the lookups
@@ -1742,9 +1751,29 @@ class HarmonicGrammar():
         self.num_roles = len(self.role_names)
         self.num_bindings = len(self.binding_names)
 
+    def _rule_to_key(self, rule):
+        """Convert rule dict to hashable tuple for set lookup"""
+        # Create a hashable key from the rule
+        f1 = rule.get('f1', None)
+        f2 = rule.get('f2', None)
+        rel = rule.get('rel', None)
+        rule_type = rule.get('rule', None)
+        br = rule.get('br', None)
+        # H value doesn't matter for uniqueness check
+        return (f1, f2, rel, rule_type, br)
+
     def has_rule(self, rule):
         # Check whether rule is in self.rules
-        return rule in self.rules
+        # return rule in self.rules
+        # Fast O(1) lookup using set instead of O(n) linear search
+        key = self._rule_to_key(rule)
+        return key in self._rules_set
+
+    def _append_rule(self, rule):
+        """Append rule and update the fast lookup set"""
+        self.rules.append(rule)
+        key = self._rule_to_key(rule)
+        self._rules_set.add(key)
 
     def _add_additional_rules(self):
 
@@ -1874,23 +1903,31 @@ class HarmonicGrammar():
             for root in roots:
                 rule = {'f1': root, 'f2': self.opts['f_root'], 'rel': 'r',
                         'H': 2.0, 'rule': 'expansion_binary', 'br': False}
-                if rule not in self.rules:
-                    self.rules.append(rule)
+                # if rule not in self.rules:
+                #     self.rules.append(rule)
+                if not self.has_rule(rule):
+                    self._append_rule(rule)
 
             rule = {'f1': self.opts['f_empty'], 'f2': self.opts['f_empty_copy'],
                     'rel': 'l', 'H': 2.0, 'rule': 'expansion_binary', 'br': False}
-            if rule not in self.rules:
-                self.rules.append(rule)
+            # if rule not in self.rules:
+            # self.rules.append(rule)
+            if not self.has_rule(rule):
+                self._append_rule(rule)
 
             rule = {'f1': self.opts['f_empty_copy'], 'f2': self.opts['f_empty_copy'],
                     'rel': 'l', 'H': 2.0, 'rule': 'expansion_binary', 'br': False}
-            if rule not in self.rules:
-                self.rules.append(rule)
+            # if rule not in self.rules:
+            #     self.rules.append(rule)
+            if not self.has_rule(rule):
+                self._append_rule(rule)
 
             rule = {'f1': self.opts['f_empty_copy'], 'f2': self.opts['f_root'],
                     'rel': 'l', 'H': 2.0, 'rule': 'expansion_binary', 'br': False}
-            if rule not in self.rules:
-                self.rules.append(rule)
+            # if rule not in self.rules:
+            #     self.rules.append(rule)
+            if not self.has_rule(rule):
+                self._append_rule(rule)
 
             # rule = {'f1': self.opts['f_empty'], 'f2': self.opts['f_root'],
             #         'rel': 'l', 'H': 2.0, 'rule': 'expansion_binary', 'br': False}
@@ -1900,18 +1937,24 @@ class HarmonicGrammar():
             # ADD unary rules
             rule = {'f1': self.opts['f_root'], 'f2': None, 'rel': '0',
                     'H': -2., 'rule': 'expansion_unary', 'br': False}
-            if rule not in self.rules:
-                self.rules.append(rule)
+            # if rule not in self.rules:
+            #     self.rules.append(rule)
+            if not self.has_rule(rule):
+                self._append_rule(rule)
 
             rule = {'f1': self.opts['f_empty'], 'f2': None, 'rel': '0',
                     'H': -1., 'rule': 'expansion_unary', 'br': False}
-            if rule not in self.rules:
-                self.rules.append(rule)
+            # if rule not in self.rules:
+            #     self.rules.append(rule)
+            if not self.has_rule(rule):
+                self._append_rule(rule)
 
             rule = {'f1': self.opts['f_empty_copy'], 'f2': None, 'rel': '0',
                     'H': -2., 'rule': 'expansion_unary', 'br': False}
-            if rule not in self.rules:
-                self.rules.append(rule)
+            # if rule not in self.rules:
+            #     self.rules.append(rule)
+            if not self.has_rule(rule):
+                self._append_rule(rule)
 
             # for fname in [self.opts['f_root'], self.opts['f_empty'], self.opts['f_empty_copy']]:
             #     if fname not in self.filler_names:
@@ -1945,7 +1988,8 @@ class HarmonicGrammar():
                                 'rel': 'm', 'H': val, 'rule': 'binary',
                                 'br': self.g.is_bracketed(rule['d1'])}
                     if not self.has_rule(new_rule):
-                        self.rules.append(new_rule)
+                        # self.rules.append(new_rule)
+                        self._append_rule(new_rule)
                 else:
                     new_rule1 = {'f1': rule['d1'], 'f2': rule['m'],
                                  'rel': 'r', 'H': val, 'rule': 'binary',
@@ -1954,9 +1998,11 @@ class HarmonicGrammar():
                                  'rel': 'l', 'H': val, 'rule': 'binary',
                                  'br': self.g.is_bracketed(rule['d1'])}
                     if not self.has_rule(new_rule1):
-                        self.rules.append(new_rule1)
+                        # self.rules.append(new_rule1)
+                        self._append_rule(new_rule)
                     if not self.has_rule(new_rule2):
-                        self.rules.append(new_rule2)
+                        # self.rules.append(new_rule2)
+                        self._append_rule(new_rule)
 
     def _add_copy_rules(self):
 
@@ -1981,14 +2027,16 @@ class HarmonicGrammar():
                             'rule': 'copy',
                             'br': self.g.is_bracketed(copy_rule['d2'])}
                     if not self.has_rule(rule):
-                        self.rules.append(rule)
+                        # self.rules.append(rule)
+                        self._append_rule(rule)
                 if copy_rule['d2'] is None:
                     rule = {'f1': copy_rule['d1'], 'f2': copy_rule['m'],
                             'rel': rel_names[1], 'H': val,
                             'rule': 'copy',
                             'br': self.g.is_bracketed(copy_rule['d1'])}
                     if not self.has_rule(rule):
-                        self.rules.append(rule)
+                        # self.rules.append(rule)
+                        self._append_rule(rule)
 
     def _add_unary_rules(self):
 
@@ -2042,7 +2090,8 @@ class HarmonicGrammar():
                             'br': self.g.is_bracketed(filler)}
 
                 if not self.has_rule(rule):
-                    self.rules.append(rule)
+                    # self.rules.append(rule)
+                    self._append_rule(rule)
 
     def get_roots(self):
 
