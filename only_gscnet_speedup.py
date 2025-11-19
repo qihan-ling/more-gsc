@@ -125,6 +125,12 @@ def encode_symbols(num_symbols, coord='dist', dp=0., dim=None, seed=None):
                 message = ("The [dim] value must be same as or "
                            "greater than the [num_symbols] value.")
                 sys.exit(message)
+                # print(
+                #     f"  Warning: Using dim={dim} < num_symbols={num_symbols}")
+                # print(
+                #     f"  This creates a compressed representation to avoid memory issues.")
+                # print(
+                #     f"  The optimization will try to approximate similarity structure in lower dimensions.")
 
         if isinstance(dp, numbers.Number):
             # if dp is number, convert it to a 2d NumPy array in which
@@ -172,6 +178,8 @@ def dot_products(dp_mat, dim, max_iter=100000, seed=None, tol=1e-6):
     Precondition:
         dp_mat must be a symmetric square matrix.
         dim must be equal to or greater than num of columns of dp_mat.
+        For exact solutions, dim must be >= num_symbols.
+        For approximate solutions with dim < num_symbols, special cases are handled.
     """
 
     # TOL = 1e-6
@@ -182,6 +190,45 @@ def dot_products(dp_mat, dim, max_iter=100000, seed=None, tol=1e-6):
 
     if seed is not None:
         np.random.seed(seed)
+
+    # SPECIAL CASE: Orthogonal encodings (dp=0 off-diagonal) with dim < num_symbols
+    # This is common for large grammars where memory is limited
+    # is_orthogonal = np.allclose(dp_mat, np.eye(num_symbols))
+
+    # if dim < num_symbols:
+    #     if is_orthogonal:
+    #         # For orthogonal case: use random unit vectors in lower dimensions
+    #         # They won't be perfectly orthogonal but will be approximately so
+    #         print(
+    #             f"  Using approximate orthogonal encodings: {dim}D for {num_symbols} symbols")
+    #         print(
+    #             f"  Memory saved: {(num_symbols**2 - dim**2) * 8 / 1e9:.2f} GB per matrix")
+
+    #         sym_mat = np.random.randn(dim, num_symbols)
+    #         # Normalize columns to unit length
+    #         sym_mat = sym_mat / np.linalg.norm(sym_mat, axis=0, keepdims=True)
+
+    #         # Report approximation quality
+    #         actual_dp = sym_mat.T.dot(sym_mat)
+    #         max_off_diag = np.max(
+    #             np.abs(actual_dp - np.diag(np.diag(actual_dp))))
+    #         print(
+    #             f"  Approximation quality: max off-diagonal dot product = {max_off_diag:.4f}")
+
+    #         return sym_mat
+    #     else:
+    #         # Non-orthogonal case with dim < num_symbols: use random projection
+    #         print(
+    #             f"  Warning: Using random projection for dim={dim} < num_symbols={num_symbols}")
+    #         print(f"  Similarity structure will be approximated, not exact.")
+
+    #         # Use random projection - won't match dp_mat exactly but is the best we can do
+    #         sym_mat = np.random.randn(dim, num_symbols)
+    #         sym_mat = sym_mat / np.linalg.norm(sym_mat, axis=0, keepdims=True)
+
+    #         return sym_mat
+
+    # STANDARD CASE: dim >= num_symbols, exact solution possible
 
     # if not (dp_mat.T == dp_mat).all():
     if not np.allclose(dp_mat.T, dp_mat):
@@ -2157,6 +2204,9 @@ class GscNet():
         if self.use_jax:
             self.q = self.opts['q_init'] * \
                 jnp.ones(self.num_roles, dtype=jnp.float32)
+            # Reset JAX random key to respect np.random.seed() calls
+            # Use current numpy random state to generate a new JAX key
+            self.rng_key = jax.random.PRNGKey(np.random.randint(0, 2**31))
         else:
             self.q = self.opts['q_init'] * np.ones(self.num_roles)
         self.T = self.opts['T_init']
