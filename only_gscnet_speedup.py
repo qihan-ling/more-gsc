@@ -100,7 +100,8 @@ def encode_symbols(num_symbols, coord='dist', dp=0., dim=None, seed=None):
         dp: float (0 [default] <= dp <= 1) or 2D-numpy array of
             pairwise similarity (dot product)
         dim: int, number of dimensions to encode a symbol.
-            must not be smaller than [num_symbols]
+            Can be smaller than num_symbols for compressed representations
+            (useful for large grammars to avoid memory issues).
 
         dp and dim will be ignored if coord is set to 'local' or 'C'.
 
@@ -121,10 +122,12 @@ def encode_symbols(num_symbols, coord='dist', dp=0., dim=None, seed=None):
         if dim is None:
             dim = num_symbols
         else:
+            # Allow dim < num_symbols for large grammars to avoid memory issues
+            # The dot_products optimization will try to find a solution in lower dimensions
             if dim < num_symbols:
-                message = ("The [dim] value must be same as or "
-                           "greater than the [num_symbols] value.")
-                sys.exit(message)
+                print(f"  Warning: Using dim={dim} < num_symbols={num_symbols}")
+                print(f"  This creates a compressed representation to avoid memory issues.")
+                print(f"  The optimization will try to approximate similarity structure in lower dimensions.")
 
         if isinstance(dp, numbers.Number):
             # if dp is number, convert it to a 2d NumPy array in which
