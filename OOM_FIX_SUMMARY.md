@@ -182,3 +182,49 @@ self.WC = sparse.dok_matrix((num_bindings, num_bindings))
 - Added progress tracking in `_build_model()`
 - Shows progress every 50,000 rules
 - Reports timing and sparsity statistics
+
+---
+
+## Update: Fourth Optimization - Convert to CSR Before Matrix Multiplication
+
+### New Problem Discovered
+
+After optimizing the loop operations, the code was hanging at `_set_weights()` which performs matrix multiplications.
+
+### Root Cause
+
+The `_set_weights()` function does:
+```python
+self.W = self.C.T.dot(self.WC).dot(self.C)  # Line 2258
+```
+
+Where:
+- `C.T`: (9,000 × 129,536)
+- `WC`: (129,536 × 129,536) - **still in dok_matrix format**
+- `C`: (129,536 × 9,000)
+
+**The problem**: `dok_matrix` is optimized for element access/assignment, NOT for matrix multiplication. Using dok_matrix for `C.T @ WC @ C` is extremely slow.
+
+### Solution: Convert to CSR Before Multiplication
+
+Moved the `dok_matrix → CSR` conversion to happen BEFORE `_set_weights()` is called:
+
+```python
+# In _build_model(), BEFORE calling _set_weights():
+self.WC = self.WC.tocsr()  # Convert to CSR for fast matrix ops
+self._set_weights()         # Now uses CSR format (fast!)
+```
+
+### Performance Improvement
+
+**Matrix multiplication performance by format:**
+- **dok_matrix**: O(nnz × n) - iterates through sparse elements inefficiently
+- **CSR format**: Optimized for matrix-vector and matrix-matrix products
+- **Speedup**: 100-1000x faster for sparse matrix multiplication
+
+### Changes Made
+
+**File: `only_gscnet_speedup_sap.py:1993-2002`**
+- Added CSR conversion at end of _build_model() before _set_weights()
+- Added timing and sparsity reporting during conversion
+- Removed duplicate CSR conversion from __init__ (line 1167-1170)

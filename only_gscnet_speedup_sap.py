@@ -1164,17 +1164,16 @@ class GscNet():
             if self.opts['use_second_order_bias']:
                 print("DEBUG: bias2weight starts")
                 self.bias2weight()
-            # Convert sparse WC matrix to CSR format for efficient operations
+            # Note: WC already converted to CSR in _build_model() for efficiency
+            # Final memory report
             if self.opts['use_sparse_wc']:
-                print("  Converting WC matrix to CSR format...")
-                self.WC = self.WC.tocsr()
                 nnz = self.WC.nnz
                 total = self.num_bindings ** 2
                 sparsity = 100 * (1 - nnz / total)
                 memory_dense_gb = total * 8 / 1e9
                 memory_sparse_mb = (nnz * (8 + 8)) / 1e6  # value + indices
                 print(
-                    f"  ✓ WC sparsity: {sparsity:.4f}% ({nnz:,} non-zero out of {total:,})")
+                    f"  ✓ Final WC sparsity: {sparsity:.4f}% ({nnz:,} non-zero out of {total:,})")
                 print(
                     f"  ✓ Memory saved: {memory_dense_gb:.1f} GB (dense) → {memory_sparse_mb:.1f} MB (sparse)")
                 print(
@@ -1990,19 +1989,23 @@ class GscNet():
                                   bsep + rname for fi in copy_fi]
                         self.set_bias(bnames, H_copy_illegitimate, c2n=False)
 
+        # Convert WC to CSR BEFORE matrix multiplication (critical for performance!)
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            print(f"    Converting WC from dok_matrix to CSR for efficient operations...")
+            t_convert = time.time()
+            self.WC = self.WC.tocsr()
+            nnz = self.WC.nnz
+            total = self.num_bindings ** 2
+            sparsity = 100 * (1 - nnz / total)
+            print(f"      WC: {nnz:,} non-zero elements ({sparsity:.4f}% sparse)")
+            print(f"      Conversion took {time.time() - t_convert:.2f}s")
+
         print(f"    Setting weights and biases...")
         self._set_weights()
         self._set_biases()
 
         dur = time.time() - t_start
         print(f"  ✓ Weight model built in {dur:.2f}s ({dur/60:.2f} min)")
-
-        # Report sparsity if using sparse matrix
-        if hasattr(self, 'use_sparse') and self.use_sparse:
-            nnz = len(self.WC.keys()) if hasattr(self.WC, 'keys') else self.WC.nnz
-            total = self.num_bindings ** 2
-            sparsity = 100 * (1 - nnz / total)
-            print(f"    WC matrix: {nnz:,} non-zero elements ({sparsity:.4f}% sparse)")
 
     def _adjust_default_param_vals(self, method='Newton'):
 
