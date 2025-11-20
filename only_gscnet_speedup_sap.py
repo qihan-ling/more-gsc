@@ -2256,7 +2256,16 @@ class GscNet():
 
         WC: W_c, weight matrix for conceptual cooridantes
         W : W_n, weight matrix for neural coordinates
+
+        NOTE: For large sparse grammars, W is never used (network works in
+        conceptual coordinates). Skip computation to save memory.
         '''
+
+        # Skip for sparse matrices - W is never used and causes OOM
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            print("      Skipping W computation (not needed for sparse matrices)")
+            self.W = None
+            return
 
         self.W = self.C.T.dot(self.WC).dot(self.C)
 
@@ -2265,7 +2274,16 @@ class GscNet():
 
         bC: b_c, bias vector for conceptual coordinates
         b : b_n, bias vector for neural coordinates
+
+        NOTE: For large sparse grammars, b is never used (network works in
+        conceptual coordinates). Skip computation to save memory.
         '''
+
+        # Skip for sparse matrices - b is never used
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            print("      Skipping b computation (not needed for sparse matrices)")
+            self.b = None
+            return
 
         self.b = self.C.T.dot(self.bC)
 

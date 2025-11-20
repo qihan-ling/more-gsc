@@ -228,3 +228,56 @@ self._set_weights()         # Now uses CSR format (fast!)
 - Added CSR conversion at end of _build_model() before _set_weights()
 - Added timing and sparsity reporting during conversion
 - Removed duplicate CSR conversion from __init__ (line 1167-1170)
+
+---
+
+## Update: Fifth Optimization - Skip Unused W and b Computation
+
+### New Problem Discovered
+
+After converting to CSR, OOM still occurred at `_set_weights()` which computes:
+```python
+self.W = self.C.T.dot(self.WC).dot(self.C)
+```
+
+### Root Cause
+
+The computation creates a huge intermediate matrix:
+- `C.T @ WC`: (9,000 × 129,536) @ (129,536 × 129,536) = **(9,000 × 129,536)** intermediate
+- Intermediate size: 9,000 × 129,536 × 8 bytes = **9.3 GB**
+- With sparse WC having 24.5M non-zeros (99.9966% sparse)
+- The intermediate result is likely dense or near-dense
+
+**Critical discovery**: Analysis of the code shows that **`self.W` and `self.b` are NEVER used**!
+- `self.W` is assigned once and never accessed
+- `self.b` is assigned once and never accessed
+- The network operates entirely in conceptual coordinates (WC, bC)
+- W and b are legacy variables from when the network used neural coordinates
+
+### Solution: Skip Computing W and b for Sparse Matrices
+
+Since W and b are never used, simply skip computing them:
+
+```python
+def _set_weights(self):
+    if hasattr(self, 'use_sparse') and self.use_sparse:
+        print("Skipping W computation (not needed for sparse matrices)")
+        self.W = None
+        return
+    self.W = self.C.T.dot(self.WC).dot(self.C)
+```
+
+### Memory Savings
+
+- **Intermediate matrix**: 9.3 GB saved during computation
+- **Final W matrix**: (9,000 × 9,000) × 8 = 648 MB saved
+- **Final b vector**: Negligible
+- **Total saved**: ~10 GB per initialization
+
+### Changes Made
+
+**File: `only_gscnet_speedup_sap.py:2254-2288`**
+- Modified `_set_weights()` to skip W computation for sparse matrices
+- Modified `_set_biases()` to skip b computation for sparse matrices
+- Added explanatory comments about why these are unused
+- Set W and b to None instead of computing them
