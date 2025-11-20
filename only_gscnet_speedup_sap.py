@@ -2701,6 +2701,10 @@ class GscNet():
                         min_sent_len=None, max_sent_len=None,
                         use_type=True, use_freq=True):
 
+        import time
+        print(f"Generating corpus with {nsamples} samples...")
+        t_start = time.time()
+
         if max_sent_len is None:
             max_sent_len = self.hg.opts['max_sent_len']
 
@@ -2709,6 +2713,13 @@ class GscNet():
         pvals = []
         counts = []
         for i in range(nsamples):
+            # Progress reporting
+            if i > 0 and i % 500 == 0:
+                elapsed = time.time() - t_start
+                rate = i / elapsed
+                remaining = (nsamples - i) / rate if rate > 0 else 0
+                print(f"  Generated {i}/{nsamples} samples ({rate:.1f} samples/s, {remaining/60:.1f} min remaining)")
+
             sentence, target, p = self.generate_sentence(
                 min_sent_len=min_sent_len,
                 max_sent_len=max_sent_len,
@@ -2739,6 +2750,11 @@ class GscNet():
                        'target': targets,  # targets_unique,
                        'count': counts,
                        'prob_sent': pvals}
+
+        dur = time.time() - t_start
+        unique_sents = len(sentences)
+        print(f"✓ Corpus generation complete in {dur:.1f}s ({dur/60:.1f} min)")
+        print(f"  {unique_sents} unique sentences from {nsamples} samples")
 
     def generate_sentence(self, min_sent_len=None, max_sent_len=None, use_type=True, add_null_input=False):
 
