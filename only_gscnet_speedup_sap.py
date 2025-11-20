@@ -3605,9 +3605,13 @@ class GscNet():
                 self.reset()    # reset q val
                 self.get_ep(method=self.train_opts['ep_method'])
 
-            # print('Check', np.max(abs(dWC)))
-
-            dWC_max = np.max(abs(dWC))
+            # Compute max gradients - handle sparse matrices to avoid densification
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse matrices, use .max() method which doesn't densify
+                # abs() on sparse matrix preserves sparsity
+                dWC_max = abs(dWC).max() if dWC.nnz > 0 else 0.0
+            else:
+                dWC_max = np.max(abs(dWC))
             dbC_max = np.max(abs(dbC))
             if 'report_cycle' in self.train_opts:
                 report_cycle = self.train_opts['report_cycle']
@@ -4308,11 +4312,23 @@ class GscNet():
                                 self.train_opts['mask0'] * val * \
                                 self.train_opts['coef']['trees']
                         else:
-                            state = np.zeros(self.num_bindings)
-                            state[key_idx] = 1.
-                            dWC += np.outer(state, state) * \
-                                self.train_opts['mask0'] * val * \
-                                self.train_opts['coef']['trees']
+                            # For sparse matrices, avoid np.outer() which creates dense matrix
+                            if hasattr(self, 'use_sparse') and self.use_sparse:
+                                # Compute gradient coefficient
+                                coef_val = val * self.train_opts['coef']['trees']
+                                # Directly update sparse matrix at (i,j) for all i,j in key_idx
+                                # This is equivalent to outer(state, state) but sparse-friendly
+                                for i in key_idx:
+                                    for j in key_idx:
+                                        # Check mask0 before updating (mask0 is sparse)
+                                        if self.train_opts['mask0'][i, j] != 0:
+                                            dWC[i, j] = dWC[i, j] + coef_val
+                            else:
+                                state = np.zeros(self.num_bindings)
+                                state[key_idx] = 1.
+                                dWC += np.outer(state, state) * \
+                                    self.train_opts['mask0'] * val * \
+                                    self.train_opts['coef']['trees']
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:

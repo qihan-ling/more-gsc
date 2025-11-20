@@ -414,3 +414,82 @@ else:
 - Use sparse `.sign()` method when available
 - Convert to lil_matrix for diagonal modification
 - Prevents densification when creating update masks
+
+---
+
+## Update: Additional Sparse Matrix Safety Fixes
+
+### Additional Problems Found (Would Cause OOM During Training)
+
+After fixing the `initialize()` diagonal extraction issue, a comprehensive audit revealed two more operations that would densify sparse matrices during the training loop:
+
+#### Problem 3: np.max(abs(dWC)) at line 3610
+
+During each training epoch, the code computes maximum gradient values for logging:
+```python
+dWC_max = np.max(abs(dWC))
+```
+
+**The problem:**
+- `dWC` is a sparse lil_matrix (129,536 × 129,536) during gradient accumulation
+- `np.max(abs(dWC))` densifies the entire matrix → 134.2 GB temporary allocation
+- This happens every epoch, causing OOM during training
+
+**Solution:**
+```python
+if hasattr(self, 'use_sparse') and self.use_sparse:
+    dWC_max = abs(dWC).max() if dWC.nnz > 0 else 0.0
+else:
+    dWC_max = np.max(abs(dWC))
+```
+
+**Memory saved:** 134.2 GB per epoch
+
+#### Problem 4: np.outer() Creating Dense Matrices at line 4313
+
+During gradient computation for tree-level errors, the code creates outer products:
+```python
+state = np.zeros(self.num_bindings)  # size 129,536
+state[key_idx] = 1.
+dWC += np.outer(state, state) * self.train_opts['mask0'] * val * coef
+```
+
+**The problem:**
+- `np.outer(state, state)` creates a dense 129,536 × 129,536 matrix = 134.2 GB
+- This happens **for every tree in every training batch** (200 trials × multiple trees per trial)
+- Each outer product creates a temporary 134.2 GB allocation, even though the result is sparse
+- Would cause repeated OOM crashes during training
+
+**Solution:**
+For sparse matrices, directly update the relevant indices without creating the full outer product:
+```python
+if hasattr(self, 'use_sparse') and self.use_sparse:
+    coef_val = val * self.train_opts['coef']['trees']
+    # Directly update sparse matrix at (i,j) for all i,j in key_idx
+    for i in key_idx:
+        for j in key_idx:
+            if self.train_opts['mask0'][i, j] != 0:
+                dWC[i, j] = dWC[i, j] + coef_val
+else:
+    # Dense path (unchanged)
+    state = np.zeros(self.num_bindings)
+    state[key_idx] = 1.
+    dWC += np.outer(state, state) * mask0 * val * coef
+```
+
+**Performance:**
+- Old: Creates 134.2 GB dense matrix for each tree (impossible)
+- New: Updates only O(k²) entries where k = |key_idx| (typically 10-50)
+- **Memory saved: 134.2 GB per tree × hundreds of trees per epoch**
+
+### Changes Made
+
+**File: `only_gscnet_speedup_sap.py:3608-3615`**
+- Fixed gradient max computation to use sparse `.max()` method
+- Avoids densification when computing dWC_max for logging
+- Added check for empty sparse matrices (nnz > 0)
+
+**File: `only_gscnet_speedup_sap.py:4315-4331`**
+- Replaced np.outer() with direct sparse index updates for tree gradients
+- Only updates non-zero mask0 positions
+- Preserves sparsity throughout gradient accumulation
