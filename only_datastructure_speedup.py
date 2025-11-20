@@ -569,6 +569,35 @@ class PCFG():
         print(
             f"    Fast lookups built in {elapsed:.3f}s ({num_fillers} fillers, {num_rules} rules)")
 
+        # Build rule index for O(1) lookup during sentence generation
+        print("    Building rule index for fast sentence generation...")
+        t0 = time.time()
+        self._build_rule_index()
+        print(f"    Rule index built in {time.time() - t0:.3f}s")
+
+    def _build_rule_index(self):
+        """Build indices for O(1) rule lookup by mother, d1, d2.
+
+        Without this, get_rules() does O(n) linear search through all rules
+        for every node expansion during sentence generation, which is extremely
+        slow for large grammars (324k+ rules).
+        """
+        from collections import defaultdict
+
+        # Index rules by mother symbol
+        self.rules_by_mother = defaultdict(list)
+        for rule in self.rules:
+            self.rules_by_mother[rule['m']].append(rule)
+
+        # Index rules by daughter symbols (for other use cases)
+        self.rules_by_d1 = defaultdict(list)
+        self.rules_by_d2 = defaultdict(list)
+        for rule in self.rules:
+            if rule['d1'] is not None:
+                self.rules_by_d1[rule['d1']].append(rule)
+            if rule['d2'] is not None:
+                self.rules_by_d2[rule['d2']].append(rule)
+
     def _create_fast_lookups_pcfg(self):
         '''Pre-compute lookup arrays for PCFG filler operations.
 
@@ -785,8 +814,31 @@ class PCFG():
                 subset0[key] = val
 
         if rules is None:
-            rules = self.rules.copy()
+            # OPTIMIZATION: Use indexed lookup when available
+            # This is O(1) instead of O(n) for large grammars
+            if hasattr(self, 'rules_by_mother') and len(subset0['m']) > 0 and len(subset0['d1']) == 0 and len(subset0['d2']) == 0:
+                # Fast path: lookup by mother only (most common case in generate_sentence)
+                rules = []
+                for m in subset0['m']:
+                    rules.extend(self.rules_by_mother.get(m, []))
+                return rules
+            elif hasattr(self, 'rules_by_d1') and len(subset0['d1']) > 0 and len(subset0['m']) == 0 and len(subset0['d2']) == 0:
+                # Fast path: lookup by d1 only
+                rules = []
+                for d1 in subset0['d1']:
+                    rules.extend(self.rules_by_d1.get(d1, []))
+                return rules
+            elif hasattr(self, 'rules_by_d2') and len(subset0['d2']) > 0 and len(subset0['m']) == 0 and len(subset0['d1']) == 0:
+                # Fast path: lookup by d2 only
+                rules = []
+                for d2 in subset0['d2']:
+                    rules.extend(self.rules_by_d2.get(d2, []))
+                return rules
+            else:
+                # General case or multiple constraints: fall back to linear search
+                rules = self.rules.copy()
 
+        # Linear search for complex queries or when rules are provided
         if len(subset0['m']) > 0:
             rules = [rule for rule in rules
                      if rule['m'] in subset0['m']]
