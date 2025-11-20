@@ -1137,7 +1137,10 @@ class GscNet():
                     f"  Large grammar detected ({self.num_bindings} bindings)")
                 print(
                     f"  Dense WC would be {dense_size_gb:.1f} GB - using SPARSE matrix!")
-                self.WC = sparse.lil_matrix(
+                # Use dok_matrix (Dictionary of Keys) for construction - much more memory efficient
+                # than lil_matrix when doing many incremental updates
+                print(f"  Using dok_matrix for memory-efficient construction...")
+                self.WC = sparse.dok_matrix(
                     (self.num_bindings, self.num_bindings), dtype=np.float64)
                 self.use_sparse = True
             else:
@@ -1755,6 +1758,10 @@ class GscNet():
         # some default values specified in HG.
         # NOTE: Complex competition rules and null rules were removed temporarily.
 
+        import time
+        print(f"  Building weight model from {len(self.hg.rules)} HG rules...")
+        t_start = time.time()
+
         # max_sent_len = self.hg.opts['max_sent_len']
         # use_hnf = self.hg.g.opts['use_hnf']
         role_system = self.hg.opts['role_system']
@@ -1770,7 +1777,11 @@ class GscNet():
 
         # t1 = time.time()
         # Binary and copy rules =========================
-        for rule in self.hg.subset_rules(['binary', 'copy']):
+        print(f"    Processing binary and copy rules...")
+        binary_copy_rules = self.hg.subset_rules(['binary', 'copy'])
+        for rule_idx, rule in enumerate(binary_copy_rules):
+            if rule_idx > 0 and rule_idx % 50000 == 0:
+                print(f"      Processed {rule_idx:,}/{len(binary_copy_rules):,} rules...")
             # for role in roles.role_names:
             for ri in range(len(self.hg.role_names)):
                 # if roles.is_bracketed(role) == rule['br']:
@@ -1790,8 +1801,10 @@ class GscNet():
         # print('{} ms for implementing binrary HG rules'.format(dur))
 
         # Competition rules =========================
+        print(f"    Processing competition rules...")
         cumulative = False
-        for rule in self.hg.subset_rules('competition'):
+        competition_rules = self.hg.subset_rules('competition')
+        for rule in competition_rules:
             r1, r2 = rule['rel'].split('/')
             if r1 == 'ub' and r2 == 'ub':
                 # for role in roles.role_names:
@@ -1850,14 +1863,17 @@ class GscNet():
                                             cumulative=True, c2n=False)
 
         # Unary rules
+        print(f"    Processing unary rules...")
         self.bC = np.zeros(self.num_bindings)
         if self.hg.opts['unary_base'] == 'filler':
-            for rule in self.hg.subset_rules('unary'):
+            unary_rules = self.hg.subset_rules('unary')
+            for rule in unary_rules:
                 self.set_filler_bias(rule['f1'], rule['H'], c2n=False)
         else:
             sys.exit('CHECK "unary_base"!')
 
         # Additional constraints (penalty for ungrammatical bindings)
+        print(f"    Adding grammatical constraints...")
         if H_root_illegitimate < 0:
             # for rname in roles.role_names:
             for ri in range(len(roles.role_names)):
@@ -1938,8 +1954,19 @@ class GscNet():
                                   bsep + rname for fi in copy_fi]
                         self.set_bias(bnames, H_copy_illegitimate, c2n=False)
 
+        print(f"    Setting weights and biases...")
         self._set_weights()
         self._set_biases()
+
+        dur = time.time() - t_start
+        print(f"  ✓ Weight model built in {dur:.2f}s ({dur/60:.2f} min)")
+
+        # Report sparsity if using sparse matrix
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            nnz = len(self.WC.keys()) if hasattr(self.WC, 'keys') else self.WC.nnz
+            total = self.num_bindings ** 2
+            sparsity = 100 * (1 - nnz / total)
+            print(f"    WC matrix: {nnz:,} non-zero elements ({sparsity:.4f}% sparse)")
 
     def _adjust_default_param_vals(self, method='Newton'):
 
@@ -2075,6 +2102,7 @@ class GscNet():
                 # self.WC += WC
                 if is_sparse:
                     # Sparse: accumulate each element individually
+                    # dok_matrix efficiently handles this pattern
                     for i in idx1:
                         for j in idx2:
                             self.WC[i, j] = self.WC[i, j] + weight

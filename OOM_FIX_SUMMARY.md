@@ -128,3 +128,57 @@ C = np.kron(R_pinv, F_pinv)      # Fast Kronecker product
 - Added diagnostic output showing matrix dimensions
 - Replaced direct `pinv(N)` with fast Kronecker decomposition
 - Added timing information to track performance
+
+---
+
+## Update: Third Optimization - dok_matrix for Construction
+
+### New Problem Discovered
+
+After the pseudo-inverse fix, OOM occurred again during `_build_model()` when populating the sparse weight matrix.
+
+### Root Cause
+
+The code was using `lil_matrix` (List of Lists) for sparse matrix construction:
+```python
+self.WC = sparse.lil_matrix((num_bindings, num_bindings))  # Line 1140
+_build_model()  # Makes ~3.2 million set_weight() calls
+```
+
+For the SAP grammar:
+- Matrix size: 129,536 × 129,536 (2,816 fillers × 46 roles)
+- Dense size: 134.2 GB
+- Number of `set_weight()` calls: ~3.2 million
+- `lil_matrix` has high memory overhead (Python lists-of-lists structure)
+- Each incremental update adds memory pressure
+
+### Solution: Use dok_matrix
+
+Switched to **`dok_matrix`** (Dictionary of Keys) for construction:
+```python
+self.WC = sparse.dok_matrix((num_bindings, num_bindings))
+```
+
+### Performance Improvement
+
+**dok_matrix advantages:**
+- Dictionary-based: O(1) element access/assignment
+- Minimal overhead: Just a Python dict, not lists-of-lists
+- Memory-efficient: Only stores actual non-zero values
+- Ideal for incremental construction with many updates
+
+**lil_matrix disadvantages:**
+- List overhead for every row (129,536 rows × 200 bytes ≈ 26 MB overhead)
+- Memory fragmentation during construction
+- Higher memory pressure with millions of updates
+
+### Changes Made
+
+**File: `only_gscnet_speedup_sap.py:1140-1145`**
+- Changed from `sparse.lil_matrix` to `sparse.dok_matrix`
+- Added diagnostic message about memory-efficient construction
+
+**File: `only_gscnet_speedup_sap.py:1756-1964`**
+- Added progress tracking in `_build_model()`
+- Shows progress every 50,000 rules
+- Reports timing and sparsity statistics
