@@ -345,3 +345,72 @@ else:
 - Added try/except for robustness
 - Added diagnostic output showing computed eigenvalue
 - Dense matrices still use original path
+
+---
+
+## Update: Seventh Optimization - Fix Sparse Diagonal Extraction in initialize()
+
+### New Problem Discovered
+
+After corpus generation completed successfully (4,821 unique sentences), the code crashed with OOM during the `initialize()` method, specifically after printing the eigenvalue.
+
+### Root Cause
+
+The `initialize()` method calls `np.diag(self.WC)` at line 3110:
+```python
+self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
+```
+
+**The problem:**
+- `np.diag()` on a **scipy sparse matrix** causes numpy to **densify the entire matrix** before extracting the diagonal
+- WC is a sparse CSR matrix of size 129,536 × 129,536
+- Densifying requires: 129,536² × 8 bytes = **134.2 GB**
+- This happens during `initialize()`, when memory is already occupied by:
+  - Original WC sparse matrix: ~450 MB
+  - Backup WC sparse matrix: ~450 MB
+  - Change-of-basis matrices (N, C, C_T): ~28 GB
+  - Corpus targets: ~5 GB
+  - Total before densification: ~34 GB
+- Adding 134.2 GB temporary dense matrix → **~168 GB** peak usage → **OOM kill**
+
+### Solution: Use .diagonal() Method for Sparse Matrices
+
+Scipy sparse matrices have a `.diagonal()` method that efficiently extracts the diagonal without densification:
+
+```python
+# Old (causes OOM):
+self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
+
+# New (sparse-safe):
+if hasattr(self, 'use_sparse') and self.use_sparse:
+    self.train_opts['idx_mask_bias2'] = self.WC.diagonal() <= -8.
+else:
+    self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
+```
+
+### Performance Improvement
+
+**Old approach (impossible):**
+- Densify 129,536 × 129,536 sparse matrix → 134.2 GB allocation
+- Extract diagonal from dense matrix
+- Caused OOM kill
+
+**New approach (fast):**
+- Extract diagonal directly from sparse matrix → 129,536 × 8 bytes = 1 MB
+- No densification required
+- **Memory saved: 134.2 GB**
+- **Time: instant vs. OOM crash**
+
+### Changes Made
+
+**File: `only_gscnet_speedup_sap.py:3111-3115`**
+- Added sparse matrix check before diagonal extraction
+- Use `.diagonal()` method for sparse matrices (avoids densification)
+- Keep `np.diag()` for dense matrices (backward compatible)
+- Added comment explaining the critical importance
+
+**File: `only_gscnet_speedup_sap.py:3172-3186`**
+- Fixed `get_mask0()` to handle sparse matrices in `update_gram_only` mode
+- Use sparse `.sign()` method when available
+- Convert to lil_matrix for diagonal modification
+- Prevents densification when creating update masks

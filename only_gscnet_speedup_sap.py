@@ -3107,7 +3107,12 @@ class GscNet():
         # NOTE: Harmony values of illegitimate bindings are assumed to be
         # smaller than or equal to -4.
         self.train_opts['idx_mask_bias1'] = np.diag(self.bC) <= -4.
-        self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
+
+        # CRITICAL: Use .diagonal() for sparse matrices to avoid densification
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            self.train_opts['idx_mask_bias2'] = self.WC.diagonal() <= -8.
+        else:
+            self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
 
         # Update train_opts
         if train_opts is not None:
@@ -3164,9 +3169,21 @@ class GscNet():
     def get_mask0(self):
 
         if self.train_opts['update_gram_only']:
-            mask0 = abs(np.sign(self.WC))
-            # allow the udpate of second-order bias of every binding
-            np.fill_diagonal(mask0, 1)
+            # Get binary mask indicating non-zero elements
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse matrices, use sign() method which preserves sparsity
+                mask0 = self.WC.sign()
+                if mask0 is None:  # sign() not available, use abs(...)
+                    mask0 = abs(self.WC).astype(bool).astype(float)
+                else:
+                    mask0 = abs(mask0)
+                # Convert to lil for diagonal modification
+                mask0 = mask0.tolil()
+                mask0.setdiag(1)
+            else:
+                mask0 = abs(np.sign(self.WC))
+                # allow the udpate of second-order bias of every binding
+                np.fill_diagonal(mask0, 1)
         else:
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
