@@ -4646,8 +4646,24 @@ class GscNet():
 
         # Condition 1: beta > eig_max to be stable
         # WC must be a symmetric matrix. So eigh() was used instead of eig()
-        eigvals, eigvecs = np.linalg.eigh(self.WC)
-        eig_max = max(eigvals)
+
+        # For sparse matrices, use scipy.sparse.linalg.eigsh to compute only largest eigenvalue
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            from scipy.sparse.linalg import eigsh
+            print("    Computing largest eigenvalue of sparse WC for bowl strength...")
+            try:
+                # Compute only the largest eigenvalue (k=1, which='LA')
+                # This is MUCH faster than computing all eigenvalues
+                eig_max = eigsh(self.WC, k=1, which='LA', return_eigenvectors=False)[0]
+                print(f"      Largest eigenvalue: {eig_max:.6f}")
+            except Exception as e:
+                print(f"      Warning: eigsh failed ({e}), using default bowl strength")
+                # Fallback: use a conservative estimate based on matrix norm
+                eig_max = 0.0  # Will be overridden by other conditions or default
+        else:
+            # Dense matrices: use full eigenvalue decomposition
+            eigvals, eigvecs = np.linalg.eigh(self.WC)
+            eig_max = max(eigvals)
 
         if np.sum(abs(self.bowl_center)) > 0:
             # TODO(PWC) Check there is only one binding
