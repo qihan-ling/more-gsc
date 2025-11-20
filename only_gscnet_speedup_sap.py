@@ -1779,24 +1779,60 @@ class GscNet():
         # Binary and copy rules =========================
         print(f"    Processing binary and copy rules...")
         binary_copy_rules = self.hg.subset_rules(['binary', 'copy'])
+        print(f"      Found {len(binary_copy_rules):,} binary/copy rules")
+
+        # OPTIMIZATION: Pre-compute filler indices to avoid string concat + lookup
+        f1_indices = {}  # Cache filler1 indices by filler name
+        f2_indices = {}  # Cache filler2 indices by filler name
+
+        is_sparse = hasattr(self, 'use_sparse') and self.use_sparse
+
+        update_count = 0
+        last_report_time = time.time()
         for rule_idx, rule in enumerate(binary_copy_rules):
-            if rule_idx > 0 and rule_idx % 50000 == 0:
-                print(f"      Processed {rule_idx:,}/{len(binary_copy_rules):,} rules...")
-            # for role in roles.role_names:
+            if rule_idx > 0 and rule_idx % 10000 == 0:
+                elapsed = time.time() - last_report_time
+                rate = 10000 / elapsed if elapsed > 0 else 0
+                print(f"      Processed {rule_idx:,}/{len(binary_copy_rules):,} rules ({rate:.0f} rules/s, {update_count:,} weight updates)")
+                last_report_time = time.time()
+                update_count = 0
+
+            # Pre-compute binding indices for this rule's fillers
+            f1 = rule['f1']
+            f2 = rule['f2']
+            H = rule['H']
+
+            # Cache the indices for each role for this filler
+            if f1 not in f1_indices:
+                f1_indices[f1] = {ri: self.binding_name_to_idx.get(f1 + bsep + roles.role_names[ri], -1)
+                                  for ri in range(len(roles.role_names))}
+            if f2 not in f2_indices:
+                f2_indices[f2] = {ri: self.binding_name_to_idx.get(f2 + bsep + roles.role_names[ri], -1)
+                                  for ri in range(len(roles.role_names))}
+
+            # Now process roles without string operations
             for ri in range(len(self.hg.role_names)):
-                # if roles.is_bracketed(role) == rule['br']:
-                role = roles.role_names[ri]
                 if self.hg.roles.role_is_bracketed[ri] == rule['br']:
-                    # mother_roles = roles.get_mothers(role)
-                    # focus_mother_roles = mother_roles[rule['rel']]
+                    idx1 = f1_indices[f1].get(ri, -1)
+                    if idx1 < 0:
+                        continue
+
                     focus_mother_roles_indices = self.hg.roles.role_mothers_idx[rule['rel']][ri]
                     for focus_mother_roles_ind in focus_mother_roles_indices:
-                        focus_mother_role = self.role_names[focus_mother_roles_ind]
-                        if focus_mother_role in roles.role_names:
-                            b1name = rule['f1'] + bsep + role
-                            b2name = rule['f2'] + bsep + focus_mother_role
-                            self.set_weight(b1name, b2name, rule['H'],
-                                            cumulative=True, c2n=False)
+                        if focus_mother_roles_ind >= len(roles.role_names):
+                            continue
+                        idx2 = f2_indices[f2].get(focus_mother_roles_ind, -1)
+                        if idx2 < 0:
+                            continue
+
+                        # Direct matrix update without string operations
+                        if is_sparse:
+                            self.WC[idx1, idx2] = self.WC[idx1, idx2] + H
+                            self.WC[idx2, idx1] = self.WC[idx2, idx1] + H
+                        else:
+                            self.WC[idx1, idx2] += H
+                            self.WC[idx2, idx1] += H
+                        update_count += 1
         # dur = time.time() - t1
         # print('{} ms for implementing binrary HG rules'.format(dur))
 
