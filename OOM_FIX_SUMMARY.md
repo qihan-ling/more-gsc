@@ -493,3 +493,65 @@ else:
 - Replaced np.outer() with direct sparse index updates for tree gradients
 - Only updates non-zero mask0 positions
 - Preserves sparsity throughout gradient accumulation
+
+---
+
+## Update: Fix np.ix_() Densification in get_mask0()
+
+### Problem 5: np.ix_() Fancy Indexing at line 3207-3216
+
+After fixing the previous issues, OOM still occurred after eigenvalue computation during `initialize()`. The culprit was the `get_mask0()` function which builds the training mask.
+
+**The problem:**
+```python
+mask0 = sparse.lil_matrix(self.WC.shape, dtype=np.float64)  # 129,536 × 129,536 sparse
+for ri in range(len(self.hg.role_names)):
+    idx = indices['self']
+    idx_l = indices['l']
+    idx_r = indices['r']
+    mask0[np.ix_(idx, idx)] = 1.        # np.ix_() causes issues!
+    mask0[np.ix_(idx, idx_l)] = 1.      # Densification or huge overhead
+    mask0[np.ix_(idx_l, idx)] = 1.      # for each role
+    ...
+```
+
+- `np.ix_()` creates fancy indexing arrays (meshgrid-like)
+- When used with sparse matrix assignment, it can:
+  - Trigger densification of the sparse matrix
+  - Create large intermediate index arrays
+  - Cause massive memory overhead even if not fully densifying
+- This happens for every non-terminal role during mask construction
+- With 46 roles and large index arrays, this accumulated to OOM
+
+**Solution:**
+Replace `np.ix_()` fancy indexing with direct sparse index updates:
+
+```python
+if hasattr(self, 'use_sparse') and self.use_sparse:
+    # Direct sparse updates - no densification
+    for i in idx:
+        for j in idx:
+            mask0[i, j] = 1.
+    for i in idx:
+        for j in idx_l:
+            mask0[i, j] = 1.
+            mask0[j, i] = 1.
+    # ... etc
+else:
+    # Dense path uses np.ix_() (original code)
+    mask0[np.ix_(idx, idx)] = 1.
+    ...
+```
+
+**Performance:**
+- Old: np.ix_() with sparse matrices → densification or huge overhead
+- New: Direct sparse element updates → no intermediate arrays
+- **Memory saved**: Avoids densification during mask construction
+
+### Changes Made
+
+**File: `only_gscnet_speedup_sap.py:3210-3242`**
+- Replaced all `np.ix_()` calls with direct sparse index loops for sparse matrices
+- Keeps `np.ix_()` for dense matrices (backward compatible)
+- Updates mask0 symmetrically where needed
+- Handles all role relationships: self, parent-left, parent-right, sister harmony

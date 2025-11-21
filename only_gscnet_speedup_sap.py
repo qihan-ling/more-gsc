@@ -3204,16 +3204,42 @@ class GscNet():
                     indices = self.get_role_and_daughter_indices_fast(ri)
                     if indices != None:
                         idx = indices['self']
-                        mask0[np.ix_(idx, idx)] = 1.
                         idx_l = indices['l']
                         idx_r = indices['r']
-                        mask0[np.ix_(idx, idx_l)] = 1.
-                        mask0[np.ix_(idx_l, idx)] = 1.
-                        mask0[np.ix_(idx, idx_r)] = 1.
-                        mask0[np.ix_(idx_r, idx)] = 1.
-                        if self.train_opts['update_sister_harmony']:
-                            mask0[np.ix_(idx_l, idx_r)] = 1.
-                            mask0[np.ix_(idx_r, idx_l)] = 1.
+
+                        # For sparse matrices, avoid np.ix_() which causes densification
+                        # Instead, directly update sparse matrix indices
+                        if hasattr(self, 'use_sparse') and self.use_sparse:
+                            # Set mask0[i,j] = 1 for all i,j in idx (self-role)
+                            for i in idx:
+                                for j in idx:
+                                    mask0[i, j] = 1.
+                            # Set mask0[i,j] = 1 for all i in idx, j in idx_l (parent-left)
+                            for i in idx:
+                                for j in idx_l:
+                                    mask0[i, j] = 1.
+                                    mask0[j, i] = 1.  # symmetric
+                            # Set mask0[i,j] = 1 for all i in idx, j in idx_r (parent-right)
+                            for i in idx:
+                                for j in idx_r:
+                                    mask0[i, j] = 1.
+                                    mask0[j, i] = 1.  # symmetric
+                            # Sister harmony (if enabled)
+                            if self.train_opts['update_sister_harmony']:
+                                for i in idx_l:
+                                    for j in idx_r:
+                                        mask0[i, j] = 1.
+                                        mask0[j, i] = 1.  # symmetric
+                        else:
+                            # Dense path (original code using np.ix_)
+                            mask0[np.ix_(idx, idx)] = 1.
+                            mask0[np.ix_(idx, idx_l)] = 1.
+                            mask0[np.ix_(idx_l, idx)] = 1.
+                            mask0[np.ix_(idx, idx_r)] = 1.
+                            mask0[np.ix_(idx_r, idx)] = 1.
+                            if self.train_opts['update_sister_harmony']:
+                                mask0[np.ix_(idx_l, idx_r)] = 1.
+                                mask0[np.ix_(idx_r, idx_l)] = 1.
 
         return mask0
 
