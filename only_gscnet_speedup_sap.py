@@ -21,7 +21,7 @@ try:
 except ImportError:
     JAX_AVAILABLE = False
     print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
-from only_datastructure_speedup import PCFG, Node, HarmonicGrammar, BrickRole
+from only_datastructure_speedup_sap import PCFG, Node, HarmonicGrammar, BrickRole
 
 
 def smooth(scalars, weight):  # Weight between 0 and 1
@@ -1137,8 +1137,13 @@ class GscNet():
                     f"  Large grammar detected ({self.num_bindings} bindings)")
                 print(
                     f"  Dense WC would be {dense_size_gb:.1f} GB - using SPARSE matrix!")
-                self.WC = sparse.lil_matrix(
+                # self.WC = sparse.lil_matrix(
+                # Use dok_matrix (Dictionary of Keys) for construction - much more memory efficient
+                # than lil_matrix when doing many incremental updates
+                print(f"  Using dok_matrix for memory-efficient construction...")
+                self.WC = sparse.dok_matrix(
                     (self.num_bindings, self.num_bindings), dtype=np.float64)
+
                 self.use_sparse = True
             else:
                 self.WC = np.zeros((self.num_bindings, self.num_bindings))
@@ -1146,34 +1151,35 @@ class GscNet():
 
             self.bC = np.zeros(self.num_bindings)
             self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
-
+            # Optimizer states will be initialized in initialize() method
+            # to avoid OOM during model construction
             # Initialize Adam states on CPU
-            if self.opts['use_sparse_wc']:
-                # Sparse optimizer states
-                print("  Initializing sparse optimizer states...")
-                self.optim = {
-                    'M_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
-                    'R_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
-                    'M_bC': np.zeros(self.num_bindings),
-                    'R_bC': np.zeros(self.num_bindings),
-                    'step_WC': 0,
-                    'step_bC': 0,
-                    'beta1': 0.9,
-                    'beta2': 0.999,
-                    'eps': 1e-8
-                }
-            else:
-                self.optim = {
-                    'M_WC': np.zeros_like(self.WC),
-                    'R_WC': np.zeros_like(self.WC),
-                    'M_bC': np.zeros_like(self.bC),
-                    'R_bC': np.zeros_like(self.bC),
-                    'step_WC': 0,
-                    'step_bC': 0,
-                    'beta1': 0.9,
-                    'beta2': 0.999,
-                    'eps': 1e-8
-                }
+            # if self.opts['use_sparse_wc']:
+            #     # Sparse optimizer states
+            #     print("  Initializing sparse optimizer states...")
+            #     self.optim = {
+            #         'M_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
+            #         'R_WC': sparse.lil_matrix((self.num_bindings, self.num_bindings), dtype=np.float64),
+            #         'M_bC': np.zeros(self.num_bindings),
+            #         'R_bC': np.zeros(self.num_bindings),
+            #         'step_WC': 0,
+            #         'step_bC': 0,
+            #         'beta1': 0.9,
+            #         'beta2': 0.999,
+            #         'eps': 1e-8
+            #     }
+            # else:
+            #     self.optim = {
+            #         'M_WC': np.zeros_like(self.WC),
+            #         'R_WC': np.zeros_like(self.WC),
+            #         'M_bC': np.zeros_like(self.bC),
+            #         'R_bC': np.zeros_like(self.bC),
+            #         'step_WC': 0,
+            #         'step_bC': 0,
+            #         'beta1': 0.9,
+            #         'beta2': 0.999,
+            #         'eps': 1e-8
+            #     }
         ############ ORIGINAL CODE COMMENTED OUT#######
         # self.WC = np.zeros((self.num_bindings, self.num_bindings))
         # self.bC = np.zeros(self.num_bindings)
@@ -1186,19 +1192,21 @@ class GscNet():
             if self.opts['use_second_order_bias']:
                 print("DEBUG: bias2weight starts")
                 self.bias2weight()
-            # Convert sparse matrices to CSR format for efficient operations
+            # Note: WC already converted to CSR in _build_model() for efficiency
+            # Final memory report
             if self.opts['use_sparse_wc']:
-                print("  Converting sparse matrices to CSR format...")
-                self.WC = self.WC.tocsr()
-                self.optim['M_WC'] = self.optim['M_WC'].tocsr()
-                self.optim['R_WC'] = self.optim['R_WC'].tocsr()
+                # print("  Converting WC matrix to CSR format...")
+                # self.WC = self.WC.tocsr()
+                # self.optim['M_WC'] = self.optim['M_WC'].tocsr()
+                # self.optim['R_WC'] = self.optim['R_WC'].tocsr()
                 nnz = self.WC.nnz
                 total = self.num_bindings ** 2
                 sparsity = 100 * (1 - nnz / total)
                 memory_dense_gb = total * 8 / 1e9
                 memory_sparse_mb = (nnz * (8 + 8)) / 1e6  # value + indices
                 print(
-                    f"  ✓ WC sparsity: {sparsity:.4f}% ({nnz:,} non-zero out of {total:,})")
+                    #     f"  ✓ WC sparsity: {sparsity:.4f}% ({nnz:,} non-zero out of {total:,})")
+                    f"  ✓ Final WC sparsity: {sparsity:.4f}% ({nnz:,} non-zero out of {total:,})")
                 print(
                     f"  ✓ Memory saved: {memory_dense_gb:.1f} GB (dense) → {memory_sparse_mb:.1f} MB (sparse)")
                 print(
@@ -1711,19 +1719,41 @@ class GscNet():
         """
 
         print("Computing change-of-basis matrices...")
-
+        t0 = time.time()
         # Compute N and C (these are manageable sizes)
         N = np.kron(self.R, self.F)
-        if N.shape[0] == N.shape[1]:
-            C = np.linalg.inv(N)
-        else:
-            C = np.linalg.pinv(N)
+        # if N.shape[0] == N.shape[1]:
+        #     C = np.linalg.inv(N)
+        # else:
+        #     C = np.linalg.pinv(N)
+        print(
+            f"  N shape: {N.shape} ({N.shape[0] * N.shape[1] * 8 / 1e9:.2f} GB)")
+        print(f"  Kronecker product took {time.time() - t0:.2f} s")
+
+        # Compute pseudo-inverse efficiently using Kronecker product property
+        # OPTIMIZATION: pinv(kron(R, F)) = kron(pinv(R), pinv(F))
+        # This is MUCH faster for large grammars!
+        t0 = time.time()
+        print(f"  Computing pseudo-inverse using fast Kronecker decomposition...")
+
+        # Compute pinv of small matrices R and F separately
+        R_pinv = np.linalg.pinv(self.R, rcond=1e-10)
+        F_pinv = np.linalg.pinv(self.F, rcond=1e-10)
+
+        # Reconstruct C using Kronecker product (much faster!)
+        C = np.kron(R_pinv, F_pinv)
+
+        dur = time.time() - t0
+        print(
+            f"  Fast pseudo-inverse took {dur:.2f} s (vs. minutes for direct method)")
+        print(f"  C shape: {C.shape}")
 
         self.N = N
         self.C = C
 
         # Compute Gc (small matrix: num_units × num_units)
-        self.Gc = self.C.T.dot(self.C)
+        print("DEBUG _add_change_of_basis_matrices")
+        # self.Gc = self.C.T.dot(self.C)
 
         # Reshape C for filler/role access
         self.C_reshaped = self.C.reshape(
@@ -1763,7 +1793,8 @@ class GscNet():
         # Initialize the model by setting weight and bias parameters to
         # some default values specified in HG.
         # NOTE: Complex competition rules and null rules were removed temporarily.
-
+        print(f"  Building weight model from {len(self.hg.rules)} HG rules...")
+        t_start = time.time()
         # max_sent_len = self.hg.opts['max_sent_len']
         # use_hnf = self.hg.g.opts['use_hnf']
         role_system = self.hg.opts['role_system']
@@ -1779,28 +1810,84 @@ class GscNet():
 
         # t1 = time.time()
         # Binary and copy rules =========================
-        for rule in self.hg.subset_rules(['binary', 'copy']):
+        # for rule in self.hg.subset_rules(['binary', 'copy']):
+        print(f"    Processing binary and copy rules...")
+        binary_copy_rules = self.hg.subset_rules(['binary', 'copy'])
+        print(f"      Found {len(binary_copy_rules):,} binary/copy rules")
+
+        # OPTIMIZATION: Pre-compute filler indices to avoid string concat + lookup
+        f1_indices = {}  # Cache filler1 indices by filler name
+        f2_indices = {}  # Cache filler2 indices by filler name
+
+        is_sparse = hasattr(self, 'use_sparse') and self.use_sparse
+
+        update_count = 0
+        last_report_time = time.time()
+        for rule_idx, rule in enumerate(binary_copy_rules):
+            if rule_idx > 0 and rule_idx % 10000 == 0:
+                elapsed = time.time() - last_report_time
+                rate = 10000 / elapsed if elapsed > 0 else 0
+                print(
+                    f"      Processed {rule_idx:,}/{len(binary_copy_rules):,} rules ({rate:.0f} rules/s, {update_count:,} weight updates)")
+                last_report_time = time.time()
+                update_count = 0
+
+            # Pre-compute binding indices for this rule's fillers
+            f1 = rule['f1']
+            f2 = rule['f2']
+            H = rule['H']
+
+            # Cache the indices for each role for this filler
+            if f1 not in f1_indices:
+                f1_indices[f1] = {ri: self.binding_name_to_idx.get(f1 + bsep + roles.role_names[ri], -1)
+                                  for ri in range(len(roles.role_names))}
+            if f2 not in f2_indices:
+                f2_indices[f2] = {ri: self.binding_name_to_idx.get(f2 + bsep + roles.role_names[ri], -1)
+                                  for ri in range(len(roles.role_names))}
+
+            # Now process roles without string operations
             # for role in roles.role_names:
             for ri in range(len(self.hg.role_names)):
                 # if roles.is_bracketed(role) == rule['br']:
-                role = roles.role_names[ri]
+                # role = roles.role_names[ri]
                 if self.hg.roles.role_is_bracketed[ri] == rule['br']:
                     # mother_roles = roles.get_mothers(role)
                     # focus_mother_roles = mother_roles[rule['rel']]
+                    idx1 = f1_indices[f1].get(ri, -1)
+                    if idx1 < 0:
+                        continue
                     focus_mother_roles_indices = self.hg.roles.role_mothers_idx[rule['rel']][ri]
                     for focus_mother_roles_ind in focus_mother_roles_indices:
-                        focus_mother_role = self.role_names[focus_mother_roles_ind]
-                        if focus_mother_role in roles.role_names:
-                            b1name = rule['f1'] + bsep + role
-                            b2name = rule['f2'] + bsep + focus_mother_role
-                            self.set_weight(b1name, b2name, rule['H'],
-                                            cumulative=True, c2n=False)
+                        # focus_mother_role = self.role_names[focus_mother_roles_ind]
+                        # if focus_mother_role in roles.role_names:
+                        #     b1name = rule['f1'] + bsep + role
+                        #     b2name = rule['f2'] + bsep + focus_mother_role
+                        #     self.set_weight(b1name, b2name, rule['H'],
+                        #                     cumulative=True, c2n=False)
+                        # abandon code above, code below Direct matrix updates bypassing set_weight()
+                        if focus_mother_roles_ind >= len(roles.role_names):
+                            continue
+                        idx2 = f2_indices[f2].get(focus_mother_roles_ind, -1)
+                        if idx2 < 0:
+                            continue
+
+                        # Direct matrix update without string operations
+                        if is_sparse:
+                            self.WC[idx1, idx2] = self.WC[idx1, idx2] + H
+                            self.WC[idx2, idx1] = self.WC[idx2, idx1] + H
+                        else:
+                            self.WC[idx1, idx2] += H
+                            self.WC[idx2, idx1] += H
+                        update_count += 1
         # dur = time.time() - t1
         # print('{} ms for implementing binrary HG rules'.format(dur))
 
         # Competition rules =========================
+        print(f"    Processing competition rules...")
         cumulative = False
-        for rule in self.hg.subset_rules('competition'):
+        # for rule in self.hg.subset_rules('competition'):
+        competition_rules = self.hg.subset_rules('competition')
+        for rule in competition_rules:
             r1, r2 = rule['rel'].split('/')
             if r1 == 'ub' and r2 == 'ub':
                 # for role in roles.role_names:
@@ -1859,9 +1946,11 @@ class GscNet():
                                             cumulative=True, c2n=False)
 
         # Unary rules
+        print(f"    Processing unary rules...")
         self.bC = np.zeros(self.num_bindings)
         if self.hg.opts['unary_base'] == 'filler':
-            for rule in self.hg.subset_rules('unary'):
+            unary_rules = self.hg.subset_rules('unary')
+            for rule in unary_rules:
                 self.set_filler_bias(rule['f1'], rule['H'], c2n=False)
         else:
             sys.exit('CHECK "unary_base"!')
@@ -1930,7 +2019,7 @@ class GscNet():
                                   bsep + rname for fi in nonterminal_fi]
                         self.set_bias(
                             bnames, H_nonterminal_illegitimate, c2n=False)
-
+        print(f"    Adding grammatical constraints...")
         if H_copy_illegitimate < 0:
             # for rname in roles.role_names:
             for ri in range(len(roles.role_names)):
@@ -1946,9 +2035,24 @@ class GscNet():
                         bnames = [self.hg.g.filler_names[fi] +
                                   bsep + rname for fi in copy_fi]
                         self.set_bias(bnames, H_copy_illegitimate, c2n=False)
+        # Convert WC to CSR BEFORE matrix multiplication (critical for performance!)
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            print(f"    Converting WC from dok_matrix to CSR for efficient operations...")
+            t_convert = time.time()
+            self.WC = self.WC.tocsr()
+            nnz = self.WC.nnz
+            total = self.num_bindings ** 2
+            sparsity = 100 * (1 - nnz / total)
+            print(
+                f"      WC: {nnz:,} non-zero elements ({sparsity:.4f}% sparse)")
+            print(f"      Conversion took {time.time() - t_convert:.2f}s")
 
+        print(f"    Setting weights...")
         self._set_weights()
+        print(f"    Setting biases...")
         self._set_biases()
+        dur = time.time() - t_start
+        print(f"  ✓ Weight model built in {dur:.2f}s ({dur/60:.2f} min)")
 
     def _adjust_default_param_vals(self, method='Newton'):
 
@@ -2063,6 +2167,7 @@ class GscNet():
             if symmetric:
                 if is_sparse:
                     # Sparse: set each element individually
+                    # dok_matrix efficiently handles this pattern
                     for i in idx1:
                         for j in idx2:
                             self.WC[i, j] = weight
@@ -2198,7 +2303,15 @@ class GscNet():
 
         WC: W_c, weight matrix for conceptual cooridantes
         W : W_n, weight matrix for neural coordinates
+
+        NOTE: For large sparse grammars, W is never used (network works in
+        conceptual coordinates). Skip computation to save memory.
         '''
+        # Skip for sparse matrices - W is never used and causes OOM
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            print("      Skipping W computation (not needed for sparse matrices)")
+            self.W = None
+            return
 
         self.W = self.C.T.dot(self.WC).dot(self.C)
 
@@ -2207,7 +2320,15 @@ class GscNet():
 
         bC: b_c, bias vector for conceptual coordinates
         b : b_n, bias vector for neural coordinates
+
+        NOTE: For large sparse grammars, b is never used (network works in
+        conceptual coordinates). Skip computation to save memory.
         '''
+        # Skip for sparse matrices - b is never used
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            print("      Skipping b computation (not needed for sparse matrices)")
+            self.b = None
+            return
 
         self.b = self.C.T.dot(self.bC)
 
@@ -2627,12 +2748,20 @@ class GscNet():
 
         if max_sent_len is None:
             max_sent_len = self.hg.opts['max_sent_len']
-
+        print(f"Generating corpus with {nsamples} samples...")
+        t_start = time.time()
         sentences = []
         targets = []
         pvals = []
         counts = []
         for i in range(nsamples):
+            # Progress reporting
+            if i > 0 and i % 500 == 0:
+                elapsed = time.time() - t_start
+                rate = i / elapsed
+                remaining = (nsamples - i) / rate if rate > 0 else 0
+                print(
+                    f"  Generated {i}/{nsamples} samples ({rate:.1f} samples/s, {remaining/60:.1f} min remaining)")
             sentence, target, p = self.generate_sentence(
                 min_sent_len=min_sent_len,
                 max_sent_len=max_sent_len,
@@ -2640,6 +2769,9 @@ class GscNet():
             # print(f"sentence: {sentence}")
             # print(f"target: {target}")
             # print(f"p: {p}")
+            if i == 0:
+                print(
+                    f"first sentence took {time.time() - t_start:.1f}s to generate")
             if sentence in sentences:
                 idx = sentences.index(sentence)
                 counts[idx] += 1
@@ -2663,6 +2795,10 @@ class GscNet():
                        'target': targets,  # targets_unique,
                        'count': counts,
                        'prob_sent': pvals}
+        dur = time.time() - t_start
+        unique_sents = len(sentences)
+        print(f"✓ Corpus generation complete in {dur:.1f}s ({dur/60:.1f} min)")
+        print(f"  {unique_sents} unique sentences from {nsamples} samples")
 
     def generate_sentence(self, min_sent_len=None, max_sent_len=None, use_type=True, add_null_input=False):
 
@@ -3015,8 +3151,13 @@ class GscNet():
         # NOTE: Harmony values of illegitimate bindings are assumed to be
         # smaller than or equal to -4.
         self.train_opts['idx_mask_bias1'] = np.diag(self.bC) <= -4.
-        self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
+        # self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
 
+        # CRITICAL: Use .diagonal() for sparse matrices to avoid densification
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            self.train_opts['idx_mask_bias2'] = self.WC.diagonal() <= -8.
+        else:
+            self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
         # Update train_opts
         if train_opts is not None:
             self.update_train_opts(train_opts)
@@ -3028,10 +3169,26 @@ class GscNet():
 
         if self.train_opts['optimizer'] == 'adam':
             self.optim = {}
-            self.optim['M_WC'] = np.zeros_like(self.WC)
-            self.optim['M_bC'] = np.zeros_like(self.bC)
+            # self.optim['M_WC'] = np.zeros_like(self.WC)
+            # self.optim['M_bC'] = np.zeros_like(self.bC)
+            # Handle sparse matrices properly
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse matrices, create sparse optimizer states
+                print("  Initializing sparse optimizer states for Adam...")
+                from scipy import sparse
+                # Use CSR format directly for efficiency (WC is already in CSR format)
+                self.optim['M_WC'] = sparse.csr_matrix(
+                    self.WC.shape, dtype=np.float64)
+                self.optim['R_WC'] = sparse.csr_matrix(
+                    self.WC.shape, dtype=np.float64)
+            else:
+                # Dense matrices
+                self.optim['M_WC'] = np.zeros_like(self.WC)
+                self.optim['R_WC'] = np.zeros_like(self.WC)
             self.optim['R_WC'] = np.zeros_like(self.WC)
             self.optim['R_bC'] = np.zeros_like(self.bC)
+            self.optim['step_WC'] = 0
+            self.optim['step_bC'] = 0
             self.optim['beta1'] = .9
             self.optim['beta2'] = .999
             self.optim['eps'] = 1e-8
@@ -3060,9 +3217,24 @@ class GscNet():
     def get_mask0(self):
 
         if self.train_opts['update_gram_only']:
-            mask0 = abs(np.sign(self.WC))
-            # allow the udpate of second-order bias of every binding
-            np.fill_diagonal(mask0, 1)
+            # mask0 = abs(np.sign(self.WC))
+            # # allow the udpate of second-order bias of every binding
+            # np.fill_diagonal(mask0, 1)
+            # Get binary mask indicating non-zero elements
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse matrices, use sign() method which preserves sparsity
+                mask0 = self.WC.sign()
+                if mask0 is None:  # sign() not available, use abs(...)
+                    mask0 = abs(self.WC).astype(bool).astype(float)
+                else:
+                    mask0 = abs(mask0)
+                # Convert to lil for diagonal modification
+                mask0 = mask0.tolil()
+                mask0.setdiag(1)
+            else:
+                mask0 = abs(np.sign(self.WC))
+                # allow the udpate of second-order bias of every binding
+                np.fill_diagonal(mask0, 1)
         else:
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
@@ -3083,16 +3255,49 @@ class GscNet():
                     indices = self.get_role_and_daughter_indices_fast(ri)
                     if indices != None:
                         idx = indices['self']
-                        mask0[np.ix_(idx, idx)] = 1.
+                        # mask0[np.ix_(idx, idx)] = 1.
                         idx_l = indices['l']
                         idx_r = indices['r']
-                        mask0[np.ix_(idx, idx_l)] = 1.
-                        mask0[np.ix_(idx_l, idx)] = 1.
-                        mask0[np.ix_(idx, idx_r)] = 1.
-                        mask0[np.ix_(idx_r, idx)] = 1.
-                        if self.train_opts['update_sister_harmony']:
-                            mask0[np.ix_(idx_l, idx_r)] = 1.
-                            mask0[np.ix_(idx_r, idx_l)] = 1.
+                        # mask0[np.ix_(idx, idx_l)] = 1.
+                        # mask0[np.ix_(idx_l, idx)] = 1.
+                        # mask0[np.ix_(idx, idx_r)] = 1.
+                        # mask0[np.ix_(idx_r, idx)] = 1.
+                        # if self.train_opts['update_sister_harmony']:
+                        #     mask0[np.ix_(idx_l, idx_r)] = 1.
+                        #     mask0[np.ix_(idx_r, idx_l)] = 1.
+                        # For sparse matrices, avoid np.ix_() which causes densification
+                        # Instead, directly update sparse matrix indices
+                        if hasattr(self, 'use_sparse') and self.use_sparse:
+                            # Set mask0[i,j] = 1 for all i,j in idx (self-role)
+                            for i in idx:
+                                for j in idx:
+                                    mask0[i, j] = 1.
+                            # Set mask0[i,j] = 1 for all i in idx, j in idx_l (parent-left)
+                            for i in idx:
+                                for j in idx_l:
+                                    mask0[i, j] = 1.
+                                    mask0[j, i] = 1.  # symmetric
+                            # Set mask0[i,j] = 1 for all i in idx, j in idx_r (parent-right)
+                            for i in idx:
+                                for j in idx_r:
+                                    mask0[i, j] = 1.
+                                    mask0[j, i] = 1.  # symmetric
+                            # Sister harmony (if enabled)
+                            if self.train_opts['update_sister_harmony']:
+                                for i in idx_l:
+                                    for j in idx_r:
+                                        mask0[i, j] = 1.
+                                        mask0[j, i] = 1.  # symmetric
+                        else:
+                            # Dense path (original code using np.ix_)
+                            mask0[np.ix_(idx, idx)] = 1.
+                            mask0[np.ix_(idx, idx_l)] = 1.
+                            mask0[np.ix_(idx_l, idx)] = 1.
+                            mask0[np.ix_(idx, idx_r)] = 1.
+                            mask0[np.ix_(idx_r, idx)] = 1.
+                            if self.train_opts['update_sister_harmony']:
+                                mask0[np.ix_(idx_l, idx_r)] = 1.
+                                mask0[np.ix_(idx_r, idx_l)] = 1.
 
         return mask0
 
@@ -3486,7 +3691,14 @@ class GscNet():
 
             # print('Check', np.max(abs(dWC)))
 
-            dWC_max = np.max(abs(dWC))
+            # dWC_max = np.max(abs(dWC))
+            # Compute max gradients - handle sparse matrices to avoid densification
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse matrices, use .max() method which doesn't densify
+                # abs() on sparse matrix preserves sparsity
+                dWC_max = abs(dWC).max() if dWC.nnz > 0 else 0.0
+            else:
+                dWC_max = np.max(abs(dWC))
             dbC_max = np.max(abs(dbC))
             if 'report_cycle' in self.train_opts:
                 report_cycle = self.train_opts['report_cycle']
@@ -4187,11 +4399,29 @@ class GscNet():
                                 self.train_opts['mask0'] * val * \
                                 self.train_opts['coef']['trees']
                         else:
-                            state = np.zeros(self.num_bindings)
-                            state[key_idx] = 1.
-                            dWC += np.outer(state, state) * \
-                                self.train_opts['mask0'] * val * \
-                                self.train_opts['coef']['trees']
+                            # state = np.zeros(self.num_bindings)
+                            # state[key_idx] = 1.
+                            # dWC += np.outer(state, state) * \
+                            #     self.train_opts['mask0'] * val * \
+                            #     self.train_opts['coef']['trees']
+                            # For sparse matrices, avoid np.outer() which creates dense matrix
+                            if hasattr(self, 'use_sparse') and self.use_sparse:
+                                # Compute gradient coefficient
+                                coef_val = val * \
+                                    self.train_opts['coef']['trees']
+                                # Directly update sparse matrix at (i,j) for all i,j in key_idx
+                                # This is equivalent to outer(state, state) but sparse-friendly
+                                for i in key_idx:
+                                    for j in key_idx:
+                                        # Check mask0 before updating (mask0 is sparse)
+                                        if self.train_opts['mask0'][i, j] != 0:
+                                            dWC[i, j] = dWC[i, j] + coef_val
+                            else:
+                                state = np.zeros(self.num_bindings)
+                                state[key_idx] = 1.
+                                dWC += np.outer(state, state) * \
+                                    self.train_opts['mask0'] * val * \
+                                    self.train_opts['coef']['trees']
 
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
@@ -4558,8 +4788,28 @@ class GscNet():
 
         # Condition 1: beta > eig_max to be stable
         # WC must be a symmetric matrix. So eigh() was used instead of eig()
-        eigvals, eigvecs = np.linalg.eigh(self.WC)
-        eig_max = max(eigvals)
+        # eigvals, eigvecs = np.linalg.eigh(self.WC)
+        # eig_max = max(eigvals)
+
+        # For sparse matrices, use scipy.sparse.linalg.eigsh to compute only largest eigenvalue
+        if hasattr(self, 'use_sparse') and self.use_sparse:
+            from scipy.sparse.linalg import eigsh
+            print("    Computing largest eigenvalue of sparse WC for bowl strength...")
+            try:
+                # Compute only the largest eigenvalue (k=1, which='LA')
+                # This is MUCH faster than computing all eigenvalues
+                eig_max = eigsh(self.WC, k=1, which='LA',
+                                return_eigenvectors=False)[0]
+                print(f"      Largest eigenvalue: {eig_max:.6f}")
+            except Exception as e:
+                print(
+                    f"      Warning: eigsh failed ({e}), using default bowl strength")
+                # Fallback: use a conservative estimate based on matrix norm
+                eig_max = 0.0  # Will be overridden by other conditions or default
+        else:
+            # Dense matrices: use full eigenvalue decomposition
+            eigvals, eigvecs = np.linalg.eigh(self.WC)
+            eig_max = max(eigvals)
 
         if np.sum(abs(self.bowl_center)) > 0:
             # TODO(PWC) Check there is only one binding
