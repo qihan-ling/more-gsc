@@ -3185,7 +3185,8 @@ class GscNet():
                 # Dense matrices
                 self.optim['M_WC'] = np.zeros_like(self.WC)
                 self.optim['R_WC'] = np.zeros_like(self.WC)
-            self.optim['R_WC'] = np.zeros_like(self.WC)
+            # FIXED: Removed duplicate line that was creating dense R_WC and causing OOM
+            # self.optim['R_WC'] = np.zeros_like(self.WC)
             self.optim['R_bC'] = np.zeros_like(self.bC)
             self.optim['step_WC'] = 0
             self.optim['step_bC'] = 0
