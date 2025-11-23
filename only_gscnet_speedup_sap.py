@@ -3229,9 +3229,12 @@ class GscNet():
                     mask0 = abs(self.WC).astype(bool).astype(float)
                 else:
                     mask0 = abs(mask0)
-                # Convert to lil for diagonal modification
-                mask0 = mask0.tolil()
-                mask0.setdiag(1)
+                # FIXED: Use dok_matrix instead of lil_matrix for memory efficiency
+                # Convert to dok for diagonal modification (more memory efficient than lil)
+                mask0 = mask0.todok()
+                # Set diagonal elements to 1
+                for i in range(min(mask0.shape)):
+                    mask0[i, i] = 1
             else:
                 mask0 = abs(np.sign(self.WC))
                 # allow the udpate of second-order bias of every binding
@@ -3240,8 +3243,9 @@ class GscNet():
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
             # Use sparse zeros for sparse WC
+            # FIXED: Use dok_matrix instead of lil_matrix for better memory efficiency during construction
             if hasattr(self, 'use_sparse') and self.use_sparse:
-                mask0 = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                mask0 = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
             else:
                 mask0 = np.zeros(self.WC.shape)
             # for role in self.role_names:
