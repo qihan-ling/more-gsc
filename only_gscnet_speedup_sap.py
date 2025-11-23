@@ -2236,11 +2236,13 @@ class GscNet():
         if hasattr(self, 'use_sparse') and self.use_sparse:
             # Sparse matrix: add to diagonal efficiently
             diag_values = 2 * self.bC
-            # Convert to lil for efficient diagonal modification
-            if not sparse.isspmatrix_lil(self.WC):
-                self.WC = self.WC.tolil()
-            # Add to existing diagonal
-            self.WC.setdiag(self.WC.diagonal() + diag_values)
+            # FIXED: Avoid tolil() conversion - modify diagonal directly
+            # This works with any sparse format (CSR, DOK, etc.)
+            current_diag = self.WC.diagonal()
+            new_diag = current_diag + diag_values
+            # Set diagonal elements individually (works with any sparse format)
+            for i in range(len(new_diag)):
+                self.WC[i, i] = new_diag[i]
         else:
             # Dense matrix: standard numpy operation
             self.WC = self.WC + np.diag(2 * self.bC)
@@ -4699,10 +4701,11 @@ class GscNet():
             # Subtract diagonal - works for both dense and sparse
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # Sparse: set diagonal to zero
+                # FIXED: Avoid tolil() conversion - set diagonal directly
                 WC0 = self.WC.copy()
-                if not sparse.isspmatrix_lil(WC0):
-                    WC0 = WC0.tolil()
-                WC0.setdiag(0)
+                # Set diagonal elements to 0 individually (works with any sparse format)
+                for i in range(min(WC0.shape)):
+                    WC0[i, i] = 0
             else:
                 # Dense: standard subtraction
                 WC0 = self.WC - np.diag(bC)
@@ -4750,9 +4753,10 @@ class GscNet():
             # Add new diagonal - works for both dense and sparse
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # Sparse: set new diagonal
-                if not sparse.isspmatrix_lil(WC0):
-                    WC0 = WC0.tolil()
-                WC0.setdiag(bC_new)
+                # FIXED: Avoid tolil() conversion - set diagonal directly
+                # Set diagonal elements individually (works with any sparse format)
+                for i in range(len(bC_new)):
+                    WC0[i, i] = bC_new[i]
                 self.WC = WC0
             else:
                 # Dense: standard addition
