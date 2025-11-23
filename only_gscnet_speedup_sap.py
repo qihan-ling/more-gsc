@@ -3356,8 +3356,9 @@ class GscNet():
                 dqpolicy = jnp.zeros(self.qpolicy.shape, dtype=jnp.float32)
             else:
                 # For sparse WC, use sparse gradient accumulator
+                # FIXED: Use dok_matrix for memory-efficient element-wise updates
                 if hasattr(self, 'use_sparse') and self.use_sparse:
-                    dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                    dWC = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
                 else:
                     dWC = np.zeros(self.WC.shape)
                 dbC = np.zeros(self.bC.shape)
@@ -3506,8 +3507,9 @@ class GscNet():
                 else:
                     maskbC_update = np.zeros(self.num_bindings)
                     # Use sparse mask for sparse WC
+                    # FIXED: Use dok_matrix for memory-efficient construction
                     if hasattr(self, 'use_sparse') and self.use_sparse:
-                        maskWC_update = sparse.lil_matrix(
+                        maskWC_update = sparse.dok_matrix(
                             (self.num_bindings, self.num_bindings), dtype=np.float64)
                     else:
                         maskWC_update = np.zeros(
@@ -3541,7 +3543,13 @@ class GscNet():
                         maskWC_update = maskWC_update.at[idx_i.flatten(
                         ), idx_j.flatten()].set(1.0)
                     else:
-                        maskWC_update[np.ix_(idx, idx)] = 1.
+                        # FIXED: Avoid np.ix_() for sparse matrices (causes densification)
+                        if hasattr(self, 'use_sparse') and self.use_sparse:
+                            for i in idx:
+                                for j in idx:
+                                    maskWC_update[i, j] = 1.
+                        else:
+                            maskWC_update[np.ix_(idx, idx)] = 1.
             else:
                 if self.use_jax:
                     maskWC_update = jnp.ones(
@@ -3574,8 +3582,9 @@ class GscNet():
                         (self.WC - ref)
                 else:
                     # Use sparse zeros for sparse WC
+                    # FIXED: Use dok_matrix for memory efficiency
                     if hasattr(self, 'use_sparse') and self.use_sparse:
-                        weight_decay = sparse.lil_matrix(
+                        weight_decay = sparse.dok_matrix(
                             self.WC.shape, dtype=np.float64)
                     else:
                         weight_decay = np.zeros(self.WC.shape)
@@ -4225,8 +4234,9 @@ class GscNet():
             dq = jnp.zeros(self.num_roles, dtype=jnp.float32)
         else:
             # For sparse WC, use sparse gradient accumulator
+            # FIXED: Use dok_matrix for memory-efficient element-wise updates
             if hasattr(self, 'use_sparse') and self.use_sparse:
-                dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                dWC = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
             else:
                 dWC = np.zeros(self.WC.shape)
             dbC = np.zeros(self.bC.shape)
@@ -4568,8 +4578,9 @@ class GscNet():
         WC_S /= float(count_S)
 
         # Use sparse zeros for sparse WC
+        # FIXED: Use dok_matrix for memory efficiency
         if hasattr(self, 'use_sparse') and self.use_sparse:
-            WC_avg = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+            WC_avg = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
         else:
             WC_avg = np.zeros(self.WC.shape)
 
@@ -4588,13 +4599,31 @@ class GscNet():
                     idx = indices['self']
                     idx_l = indices['l']
                     idx_r = indices['r']
-                    WC_avg[np.ix_(idx, idx_l)] = WC_L
-                    WC_avg[np.ix_(idx_l, idx)] = WC_L.T
-                    WC_avg[np.ix_(idx, idx_r)] = WC_R
-                    WC_avg[np.ix_(idx_r, idx)] = WC_R.T
-                    # In the default setting, this will be 0.
-                    WC_avg[np.ix_(idx_l, idx_r)] = WC_S
-                    WC_avg[np.ix_(idx_r, idx_l)] = WC_S.T
+                    # FIXED: Avoid np.ix_() for sparse matrices (causes densification)
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        # Explicit loops to avoid densification
+                        for i_pos, i in enumerate(idx):
+                            for j_pos, j in enumerate(idx_l):
+                                WC_avg[i, j] = WC_L[i_pos, j_pos]
+                                WC_avg[j, i] = WC_L[j_pos, i_pos]  # Transpose
+                        for i_pos, i in enumerate(idx):
+                            for j_pos, j in enumerate(idx_r):
+                                WC_avg[i, j] = WC_R[i_pos, j_pos]
+                                WC_avg[j, i] = WC_R[j_pos, i_pos]  # Transpose
+                        # Sister harmony (usually 0 in default setting)
+                        if WC_S != 0:
+                            for i_pos, i in enumerate(idx_l):
+                                for j_pos, j in enumerate(idx_r):
+                                    WC_avg[i, j] = WC_S[i_pos, j_pos]
+                                    WC_avg[j, i] = WC_S[j_pos, i_pos]  # Transpose
+                    else:
+                        WC_avg[np.ix_(idx, idx_l)] = WC_L
+                        WC_avg[np.ix_(idx_l, idx)] = WC_L.T
+                        WC_avg[np.ix_(idx, idx_r)] = WC_R
+                        WC_avg[np.ix_(idx_r, idx)] = WC_R.T
+                        # In the default setting, this will be 0.
+                        WC_avg[np.ix_(idx_l, idx_r)] = WC_S
+                        WC_avg[np.ix_(idx_r, idx_l)] = WC_S.T
 
         return WC_avg
 
