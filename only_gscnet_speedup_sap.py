@@ -3245,58 +3245,84 @@ class GscNet():
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
             # Use sparse zeros for sparse WC
-            # FIXED: Use dok_matrix instead of lil_matrix for better memory efficiency during construction
+            # CRITICAL FIX: For large grammars, use vectorized COO construction instead of nested loops
             if hasattr(self, 'use_sparse') and self.use_sparse:
-                mask0 = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
-            else:
-                mask0 = np.zeros(self.WC.shape)
-            # for role in self.role_names:
-            #     idx = self.find_roles(role)
-            #     mask0[np.ix_(idx, idx)] = 1.
-            #     if not self.hg.roles.is_terminal(role):
-            #         daughters = self.hg.roles.get_daughters(role)
-            #         idx_l = self.find_roles(daughters['l'])
-            #         idx_r = self.find_roles(daughters['r'])
-            for ri in range(len(self.hg.role_names)):
-                if not self.hg.roles.role_is_terminal[ri]:
-                    indices = self.get_role_and_daughter_indices_fast(ri)
-                    if indices != None:
-                        idx = indices['self']
-                        # mask0[np.ix_(idx, idx)] = 1.
-                        idx_l = indices['l']
-                        idx_r = indices['r']
-                        # mask0[np.ix_(idx, idx_l)] = 1.
-                        # mask0[np.ix_(idx_l, idx)] = 1.
-                        # mask0[np.ix_(idx, idx_r)] = 1.
-                        # mask0[np.ix_(idx_r, idx)] = 1.
-                        # if self.train_opts['update_sister_harmony']:
-                        #     mask0[np.ix_(idx_l, idx_r)] = 1.
-                        #     mask0[np.ix_(idx_r, idx_l)] = 1.
-                        # For sparse matrices, avoid np.ix_() which causes densification
-                        # Instead, directly update sparse matrix indices
-                        if hasattr(self, 'use_sparse') and self.use_sparse:
-                            # Set mask0[i,j] = 1 for all i,j in idx (self-role)
-                            for i in idx:
-                                for j in idx:
-                                    mask0[i, j] = 1.
-                            # Set mask0[i,j] = 1 for all i in idx, j in idx_l (parent-left)
-                            for i in idx:
-                                for j in idx_l:
-                                    mask0[i, j] = 1.
-                                    mask0[j, i] = 1.  # symmetric
-                            # Set mask0[i,j] = 1 for all i in idx, j in idx_r (parent-right)
-                            for i in idx:
-                                for j in idx_r:
-                                    mask0[i, j] = 1.
-                                    mask0[j, i] = 1.  # symmetric
+                print("    Building mask0 using vectorized COO construction...")
+                import time
+                t_start = time.time()
+
+                # Collect all (row, col) pairs first using vectorized operations
+                row_list = []
+                col_list = []
+
+                for ri in range(len(self.hg.role_names)):
+                    if not self.hg.roles.role_is_terminal[ri]:
+                        indices = self.get_role_and_daughter_indices_fast(ri)
+                        if indices != None:
+                            idx = np.array(indices['self'])
+                            idx_l = np.array(indices['l'])
+                            idx_r = np.array(indices['r'])
+
+                            # idx × idx (self-role): use meshgrid for vectorized pairs
+                            rows_self, cols_self = np.meshgrid(idx, idx, indexing='ij')
+                            row_list.append(rows_self.ravel())
+                            col_list.append(cols_self.ravel())
+
+                            # idx × idx_l (parent-left)
+                            rows_pl, cols_pl = np.meshgrid(idx, idx_l, indexing='ij')
+                            row_list.append(rows_pl.ravel())
+                            col_list.append(cols_pl.ravel())
+                            # Symmetric: idx_l × idx
+                            row_list.append(cols_pl.ravel())
+                            col_list.append(rows_pl.ravel())
+
+                            # idx × idx_r (parent-right)
+                            rows_pr, cols_pr = np.meshgrid(idx, idx_r, indexing='ij')
+                            row_list.append(rows_pr.ravel())
+                            col_list.append(cols_pr.ravel())
+                            # Symmetric: idx_r × idx
+                            row_list.append(cols_pr.ravel())
+                            col_list.append(rows_pr.ravel())
+
                             # Sister harmony (if enabled)
                             if self.train_opts['update_sister_harmony']:
-                                for i in idx_l:
-                                    for j in idx_r:
-                                        mask0[i, j] = 1.
-                                        mask0[j, i] = 1.  # symmetric
-                        else:
-                            # Dense path (original code using np.ix_)
+                                rows_s, cols_s = np.meshgrid(idx_l, idx_r, indexing='ij')
+                                row_list.append(rows_s.ravel())
+                                col_list.append(cols_s.ravel())
+                                # Symmetric
+                                row_list.append(cols_s.ravel())
+                                col_list.append(rows_s.ravel())
+
+                # Concatenate all indices
+                all_rows = np.concatenate(row_list)
+                all_cols = np.concatenate(col_list)
+                all_data = np.ones(len(all_rows), dtype=np.float64)
+
+                print(f"      Collected {len(all_rows):,} mask entries in {time.time() - t_start:.2f}s")
+
+                # Build sparse matrix using COO format (very fast for bulk construction)
+                t_coo = time.time()
+                mask0 = sparse.coo_matrix(
+                    (all_data, (all_rows, all_cols)),
+                    shape=self.WC.shape,
+                    dtype=np.float64
+                )
+                # Remove duplicates by converting to CSR (sums duplicates automatically)
+                mask0 = mask0.tocsr()
+                # Convert non-zero values to 1 (in case of summed duplicates)
+                mask0.data = np.ones_like(mask0.data)
+                print(f"      Built COO matrix in {time.time() - t_coo:.2f}s")
+                print(f"      Total mask0 construction: {time.time() - t_start:.2f}s")
+            else:
+                # Dense path (original code using np.ix_)
+                mask0 = np.zeros(self.WC.shape)
+                for ri in range(len(self.hg.role_names)):
+                    if not self.hg.roles.role_is_terminal[ri]:
+                        indices = self.get_role_and_daughter_indices_fast(ri)
+                        if indices != None:
+                            idx = indices['self']
+                            idx_l = indices['l']
+                            idx_r = indices['r']
                             mask0[np.ix_(idx, idx)] = 1.
                             mask0[np.ix_(idx, idx_l)] = 1.
                             mask0[np.ix_(idx_l, idx)] = 1.
@@ -3306,13 +3332,13 @@ class GscNet():
                                 mask0[np.ix_(idx_l, idx_r)] = 1.
                                 mask0[np.ix_(idx_r, idx_l)] = 1.
 
-        # CRITICAL: Convert mask0 to CSR format for fast element access during training
-        # dok_matrix is great for construction but SLOW for repeated lookups
+        # CRITICAL: Ensure mask0 is in CSR format for fast element access during training
         # CSR format is optimized for element access like mask0[i,j] which happens
         # millions of times in the training loop
         if hasattr(self, 'use_sparse') and self.use_sparse and sparse.issparse(mask0):
-            print("    Converting mask0 from dok to CSR for fast training access...")
-            mask0 = mask0.tocsr()
+            if not sparse.isspmatrix_csr(mask0):
+                print("    Converting mask0 to CSR for fast training access...")
+                mask0 = mask0.tocsr()
 
         return mask0
 
