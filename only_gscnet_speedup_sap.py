@@ -3306,6 +3306,14 @@ class GscNet():
                                 mask0[np.ix_(idx_l, idx_r)] = 1.
                                 mask0[np.ix_(idx_r, idx_l)] = 1.
 
+        # CRITICAL: Convert mask0 to CSR format for fast element access during training
+        # dok_matrix is great for construction but SLOW for repeated lookups
+        # CSR format is optimized for element access like mask0[i,j] which happens
+        # millions of times in the training loop
+        if hasattr(self, 'use_sparse') and self.use_sparse and sparse.issparse(mask0):
+            print("    Converting mask0 from dok to CSR for fast training access...")
+            mask0 = mask0.tocsr()
+
         return mask0
 
     def update_train_opts(self, train_opts):
