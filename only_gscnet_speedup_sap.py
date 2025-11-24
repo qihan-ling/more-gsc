@@ -2236,10 +2236,13 @@ class GscNet():
         if hasattr(self, 'use_sparse') and self.use_sparse:
             # Sparse matrix: add to diagonal efficiently
             diag_values = 2 * self.bC
-            # Convert to lil for efficient diagonal modification
-            if not sparse.isspmatrix_lil(self.WC):
-                self.WC = self.WC.tolil()
-            # Add to existing diagonal
+            # FIXED: Avoid tolil() conversion - modify diagonal directly
+            # This works with any sparse format (CSR, DOK, etc.)
+            current_diag = self.WC.diagonal()
+            new_diag = current_diag + diag_values
+            # Set diagonal elements individually (works with any sparse format)
+            for i in range(len(new_diag)):
+                self.WC[i, i] = new_diag[i]
             self.WC.setdiag(self.WC.diagonal() + diag_values)
         else:
             # Dense matrix: standard numpy operation
@@ -3227,9 +3230,12 @@ class GscNet():
                     mask0 = abs(self.WC).astype(bool).astype(float)
                 else:
                     mask0 = abs(mask0)
-                # Convert to lil for diagonal modification
-                mask0 = mask0.tolil()
-                mask0.setdiag(1)
+                # FIXED: Use dok_matrix instead of lil_matrix for memory efficiency
+                # Convert to dok for diagonal modification (more memory efficient than lil)
+                mask0 = mask0.todok()
+                # Set diagonal elements to 1
+                for i in range(min(mask0.shape)):
+                    mask0[i, i] = 1
             else:
                 mask0 = abs(np.sign(self.WC))
                 # allow the udpate of second-order bias of every binding
@@ -3238,57 +3244,90 @@ class GscNet():
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
             # Use sparse zeros for sparse WC
+            # CRITICAL FIX: For large grammars, use vectorized COO construction instead of nested loops
             if hasattr(self, 'use_sparse') and self.use_sparse:
-                mask0 = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
-            else:
-                mask0 = np.zeros(self.WC.shape)
-            # for role in self.role_names:
-            #     idx = self.find_roles(role)
-            #     mask0[np.ix_(idx, idx)] = 1.
-            #     if not self.hg.roles.is_terminal(role):
-            #         daughters = self.hg.roles.get_daughters(role)
-            #         idx_l = self.find_roles(daughters['l'])
-            #         idx_r = self.find_roles(daughters['r'])
-            for ri in range(len(self.hg.role_names)):
-                if not self.hg.roles.role_is_terminal[ri]:
-                    indices = self.get_role_and_daughter_indices_fast(ri)
-                    if indices != None:
-                        idx = indices['self']
-                        # mask0[np.ix_(idx, idx)] = 1.
-                        idx_l = indices['l']
-                        idx_r = indices['r']
-                        # mask0[np.ix_(idx, idx_l)] = 1.
-                        # mask0[np.ix_(idx_l, idx)] = 1.
-                        # mask0[np.ix_(idx, idx_r)] = 1.
-                        # mask0[np.ix_(idx_r, idx)] = 1.
-                        # if self.train_opts['update_sister_harmony']:
-                        #     mask0[np.ix_(idx_l, idx_r)] = 1.
-                        #     mask0[np.ix_(idx_r, idx_l)] = 1.
-                        # For sparse matrices, avoid np.ix_() which causes densification
-                        # Instead, directly update sparse matrix indices
-                        if hasattr(self, 'use_sparse') and self.use_sparse:
-                            # Set mask0[i,j] = 1 for all i,j in idx (self-role)
-                            for i in idx:
-                                for j in idx:
-                                    mask0[i, j] = 1.
-                            # Set mask0[i,j] = 1 for all i in idx, j in idx_l (parent-left)
-                            for i in idx:
-                                for j in idx_l:
-                                    mask0[i, j] = 1.
-                                    mask0[j, i] = 1.  # symmetric
-                            # Set mask0[i,j] = 1 for all i in idx, j in idx_r (parent-right)
-                            for i in idx:
-                                for j in idx_r:
-                                    mask0[i, j] = 1.
-                                    mask0[j, i] = 1.  # symmetric
+                print("    Building mask0 using vectorized COO construction...")
+                import time
+                t_start = time.time()
+
+                # Collect all (row, col) pairs first using vectorized operations
+                row_list = []
+                col_list = []
+
+                for ri in range(len(self.hg.role_names)):
+                    if not self.hg.roles.role_is_terminal[ri]:
+                        indices = self.get_role_and_daughter_indices_fast(ri)
+                        if indices != None:
+                            idx = np.array(indices['self'])
+                            idx_l = np.array(indices['l'])
+                            idx_r = np.array(indices['r'])
+
+                            # idx × idx (self-role): use meshgrid for vectorized pairs
+                            rows_self, cols_self = np.meshgrid(
+                                idx, idx, indexing='ij')
+                            row_list.append(rows_self.ravel())
+                            col_list.append(cols_self.ravel())
+
+                            # idx × idx_l (parent-left)
+                            rows_pl, cols_pl = np.meshgrid(
+                                idx, idx_l, indexing='ij')
+                            row_list.append(rows_pl.ravel())
+                            col_list.append(cols_pl.ravel())
+                            # Symmetric: idx_l × idx
+                            row_list.append(cols_pl.ravel())
+                            col_list.append(rows_pl.ravel())
+
+                            # idx × idx_r (parent-right)
+                            rows_pr, cols_pr = np.meshgrid(
+                                idx, idx_r, indexing='ij')
+                            row_list.append(rows_pr.ravel())
+                            col_list.append(cols_pr.ravel())
+                            # Symmetric: idx_r × idx
+                            row_list.append(cols_pr.ravel())
+                            col_list.append(rows_pr.ravel())
+
                             # Sister harmony (if enabled)
                             if self.train_opts['update_sister_harmony']:
-                                for i in idx_l:
-                                    for j in idx_r:
-                                        mask0[i, j] = 1.
-                                        mask0[j, i] = 1.  # symmetric
-                        else:
-                            # Dense path (original code using np.ix_)
+                                rows_s, cols_s = np.meshgrid(
+                                    idx_l, idx_r, indexing='ij')
+                                row_list.append(rows_s.ravel())
+                                col_list.append(cols_s.ravel())
+                                # Symmetric
+                                row_list.append(cols_s.ravel())
+                                col_list.append(rows_s.ravel())
+
+                # Concatenate all indices
+                all_rows = np.concatenate(row_list)
+                all_cols = np.concatenate(col_list)
+                all_data = np.ones(len(all_rows), dtype=np.float64)
+
+                print(
+                    f"      Collected {len(all_rows):,} mask entries in {time.time() - t_start:.2f}s")
+
+                # Build sparse matrix using COO format (very fast for bulk construction)
+                t_coo = time.time()
+                mask0 = sparse.coo_matrix(
+                    (all_data, (all_rows, all_cols)),
+                    shape=self.WC.shape,
+                    dtype=np.float64
+                )
+                # Remove duplicates by converting to CSR (sums duplicates automatically)
+                mask0 = mask0.tocsr()
+                # Convert non-zero values to 1 (in case of summed duplicates)
+                mask0.data = np.ones_like(mask0.data)
+                print(f"      Built COO matrix in {time.time() - t_coo:.2f}s")
+                print(
+                    f"      Total mask0 construction: {time.time() - t_start:.2f}s")
+            else:
+                # Dense path (original code using np.ix_)
+                mask0 = np.zeros(self.WC.shape)
+                for ri in range(len(self.hg.role_names)):
+                    if not self.hg.roles.role_is_terminal[ri]:
+                        indices = self.get_role_and_daughter_indices_fast(ri)
+                        if indices != None:
+                            idx = indices['self']
+                            idx_l = indices['l']
+                            idx_r = indices['r']
                             mask0[np.ix_(idx, idx)] = 1.
                             mask0[np.ix_(idx, idx_l)] = 1.
                             mask0[np.ix_(idx_l, idx)] = 1.
@@ -3297,6 +3336,14 @@ class GscNet():
                             if self.train_opts['update_sister_harmony']:
                                 mask0[np.ix_(idx_l, idx_r)] = 1.
                                 mask0[np.ix_(idx_r, idx_l)] = 1.
+
+        # CRITICAL: Ensure mask0 is in CSR format for fast element access during training
+        # CSR format is optimized for element access like mask0[i,j] which happens
+        # millions of times in the training loop
+        if hasattr(self, 'use_sparse') and self.use_sparse and sparse.issparse(mask0):
+            if not sparse.isspmatrix_csr(mask0):
+                print("    Converting mask0 to CSR for fast training access...")
+                mask0 = mask0.tocsr()
 
         return mask0
 
@@ -3351,7 +3398,7 @@ class GscNet():
             else:
                 # For sparse WC, use sparse gradient accumulator
                 if hasattr(self, 'use_sparse') and self.use_sparse:
-                    dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                    dWC = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
                 else:
                     dWC = np.zeros(self.WC.shape)
                 dbC = np.zeros(self.bC.shape)
@@ -3501,7 +3548,7 @@ class GscNet():
                     maskbC_update = np.zeros(self.num_bindings)
                     # Use sparse mask for sparse WC
                     if hasattr(self, 'use_sparse') and self.use_sparse:
-                        maskWC_update = sparse.lil_matrix(
+                        maskWC_update = sparse.dok_matrix(
                             (self.num_bindings, self.num_bindings), dtype=np.float64)
                     else:
                         maskWC_update = np.zeros(
@@ -3535,7 +3582,13 @@ class GscNet():
                         maskWC_update = maskWC_update.at[idx_i.flatten(
                         ), idx_j.flatten()].set(1.0)
                     else:
-                        maskWC_update[np.ix_(idx, idx)] = 1.
+                        # FIXED: Avoid np.ix_() for sparse matrices (causes densification)
+                        if hasattr(self, 'use_sparse') and self.use_sparse:
+                            for i in idx:
+                                for j in idx:
+                                    maskWC_update[i, j] = 1.
+                        else:
+                            maskWC_update[np.ix_(idx, idx)] = 1.
             else:
                 if self.use_jax:
                     maskWC_update = jnp.ones(
@@ -3569,7 +3622,7 @@ class GscNet():
                 else:
                     # Use sparse zeros for sparse WC
                     if hasattr(self, 'use_sparse') and self.use_sparse:
-                        weight_decay = sparse.lil_matrix(
+                        weight_decay = sparse.dok_matrix(
                             self.WC.shape, dtype=np.float64)
                     else:
                         weight_decay = np.zeros(self.WC.shape)
@@ -4220,7 +4273,7 @@ class GscNet():
         else:
             # For sparse WC, use sparse gradient accumulator
             if hasattr(self, 'use_sparse') and self.use_sparse:
-                dWC = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+                dWC = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
             else:
                 dWC = np.zeros(self.WC.shape)
             dbC = np.zeros(self.bC.shape)
@@ -4563,7 +4616,7 @@ class GscNet():
 
         # Use sparse zeros for sparse WC
         if hasattr(self, 'use_sparse') and self.use_sparse:
-            WC_avg = sparse.lil_matrix(self.WC.shape, dtype=np.float64)
+            WC_avg = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
         else:
             WC_avg = np.zeros(self.WC.shape)
 
@@ -4582,13 +4635,32 @@ class GscNet():
                     idx = indices['self']
                     idx_l = indices['l']
                     idx_r = indices['r']
-                    WC_avg[np.ix_(idx, idx_l)] = WC_L
-                    WC_avg[np.ix_(idx_l, idx)] = WC_L.T
-                    WC_avg[np.ix_(idx, idx_r)] = WC_R
-                    WC_avg[np.ix_(idx_r, idx)] = WC_R.T
-                    # In the default setting, this will be 0.
-                    WC_avg[np.ix_(idx_l, idx_r)] = WC_S
-                    WC_avg[np.ix_(idx_r, idx_l)] = WC_S.T
+                   # FIXED: Avoid np.ix_() for sparse matrices (causes densification)
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        # Explicit loops to avoid densification
+                        for i_pos, i in enumerate(idx):
+                            for j_pos, j in enumerate(idx_l):
+                                WC_avg[i, j] = WC_L[i_pos, j_pos]
+                                WC_avg[j, i] = WC_L[j_pos, i_pos]  # Transpose
+                        for i_pos, i in enumerate(idx):
+                            for j_pos, j in enumerate(idx_r):
+                                WC_avg[i, j] = WC_R[i_pos, j_pos]
+                                WC_avg[j, i] = WC_R[j_pos, i_pos]  # Transpose
+                        # Sister harmony (usually 0 in default setting)
+                        if WC_S != 0:
+                            for i_pos, i in enumerate(idx_l):
+                                for j_pos, j in enumerate(idx_r):
+                                    WC_avg[i, j] = WC_S[i_pos, j_pos]
+                                    # Transpose
+                                    WC_avg[j, i] = WC_S[j_pos, i_pos]
+                    else:
+                        WC_avg[np.ix_(idx, idx_l)] = WC_L
+                        WC_avg[np.ix_(idx_l, idx)] = WC_L.T
+                        WC_avg[np.ix_(idx, idx_r)] = WC_R
+                        WC_avg[np.ix_(idx_r, idx)] = WC_R.T
+                        # In the default setting, this will be 0.
+                        WC_avg[np.ix_(idx_l, idx_r)] = WC_S
+                        WC_avg[np.ix_(idx_r, idx_l)] = WC_S.T
 
         return WC_avg
 
@@ -4665,9 +4737,9 @@ class GscNet():
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # Sparse: set diagonal to zero
                 WC0 = self.WC.copy()
-                if not sparse.isspmatrix_lil(WC0):
-                    WC0 = WC0.tolil()
-                WC0.setdiag(0)
+                # Set diagonal elements to 0 individually (works with any sparse format)
+                for i in range(min(WC0.shape)):
+                    WC0[i, i] = 0
             else:
                 # Dense: standard subtraction
                 WC0 = self.WC - np.diag(bC)
@@ -4715,9 +4787,10 @@ class GscNet():
             # Add new diagonal - works for both dense and sparse
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # Sparse: set new diagonal
-                if not sparse.isspmatrix_lil(WC0):
-                    WC0 = WC0.tolil()
-                WC0.setdiag(bC_new)
+                # FIXED: Avoid tolil() conversion - set diagonal directly
+                # Set diagonal elements individually (works with any sparse format)
+                for i in range(len(bC_new)):
+                    WC0[i, i] = bC_new[i]
                 self.WC = WC0
             else:
                 # Dense: standard addition
