@@ -2236,13 +2236,12 @@ class GscNet():
         if hasattr(self, 'use_sparse') and self.use_sparse:
             # Sparse matrix: add to diagonal efficiently
             diag_values = 2 * self.bC
-            # FIXED: Avoid tolil() conversion - modify diagonal directly
-            # This works with any sparse format (CSR, DOK, etc.)
+            # FIXED: Use setdiag() for fast diagonal modification on CSR matrices
+            # setdiag() is optimized for all scipy sparse formats
             current_diag = self.WC.diagonal()
             new_diag = current_diag + diag_values
             # Set diagonal elements individually (works with any sparse format)
-            for i in range(len(new_diag)):
-                self.WC[i, i] = new_diag[i]
+            self.WC.setdiag(new_diag)
             self.WC.setdiag(self.WC.diagonal() + diag_values)
         else:
             # Dense matrix: standard numpy operation
@@ -4738,8 +4737,7 @@ class GscNet():
                 # Sparse: set diagonal to zero
                 WC0 = self.WC.copy()
                 # Set diagonal elements to 0 individually (works with any sparse format)
-                for i in range(min(WC0.shape)):
-                    WC0[i, i] = 0
+                WC0.setdiag(0)
             else:
                 # Dense: standard subtraction
                 WC0 = self.WC - np.diag(bC)
@@ -4787,10 +4785,8 @@ class GscNet():
             # Add new diagonal - works for both dense and sparse
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # Sparse: set new diagonal
-                # FIXED: Avoid tolil() conversion - set diagonal directly
-                # Set diagonal elements individually (works with any sparse format)
-                for i in range(len(bC_new)):
-                    WC0[i, i] = bC_new[i]
+                # FIXED: Use setdiag() for fast diagonal modification on CSR matrices
+                WC0.setdiag(bC_new)
                 self.WC = WC0
             else:
                 # Dense: standard addition
