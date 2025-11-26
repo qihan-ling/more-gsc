@@ -2902,7 +2902,7 @@ class GscNet():
         # mask_bias
         # NOTE: Harmony values of illegitimate bindings are assumed to be
         # smaller than or equal to -4.
-        self.train_opts['idx_mask_bias1'] = np.diag(self.bC) <= -4.
+        self.train_opts['idx_mask_bias1'] = self.bC <= -4.
         self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
 
         # Update train_opts

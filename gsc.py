@@ -6387,7 +6387,7 @@ class GscNet():
         # mask_avg_bias2 = np.ones(self.num_bindings)
         # mask_avg_bias2[idx_mask_bias2] = np.nan
         # self.train_opts['mask_avg_bias2'] = mask_avg_bias2
-        self.train_opts['idx_mask_bias1'] = np.diag(self.bC) <= -4.
+        self.train_opts['idx_mask_bias1'] = self.bC <= -4.
         self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
 
         # Update train_opts
