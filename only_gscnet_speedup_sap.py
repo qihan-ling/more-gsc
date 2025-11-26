@@ -1606,7 +1606,7 @@ class GscNet():
         self.opts['scaling_factor'] = 0.
         self.opts['scale_type'] = 'diagonal'
         self.opts['ep_method'] = 'integration'
-        self.opts['use_runC'] = True  # Use runC() which works with sparse matrices
+        self.opts['use_runC'] = False
 
         self.opts['penalize_root_posN'] = True
         # JAX default
