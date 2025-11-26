@@ -3462,10 +3462,12 @@ class GscNet():
                     # TEST: change estimate_prob_inc to estimate_prob_inc_jax
                     if JAX_AVAILABLE:
                         stat_Q = self.estimate_prob_inc_jax(
-                            prefix=prefix, num_trials=self.train_opts['num_trials'])
+                            prefix=prefix, num_trials=self.train_opts['num_trials'],
+                            progress=10)  # Report every 10 trials
                     else:
                         stat_Q, actC_set = self.estimate_prob_inc(
-                            prefix=prefix, num_trials=self.train_opts['num_trials'])
+                            prefix=prefix, num_trials=self.train_opts['num_trials'],
+                            progress=10)  # Report every 10 trials
                     if self.train_opts['ema_stat_weight'] > 0:
                         if hasattr(self, 'stat_Q_prev'):
                             stat_Q_new = self.ema_stat(
