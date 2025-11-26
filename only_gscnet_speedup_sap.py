@@ -2961,6 +2961,12 @@ class GscNet():
 
         return corpus
 
+    def run_prefix(self, prefix, update_q_discrete=False, log_trace=False):
+        for wi, fname in enumerate(prefix):
+            self.run_word(
+                fname, wi + 1, update_q_discrete=update_q_discrete, log_trace=log_trace)
+            self.store.append({'actC': self.actC, 'q': self.q})
+
     def run_word(self, fname, wpos, symmetric=True, update_q_discrete=False, log_trace=False):
 
         q_max_backup = self.opts['q_max']
@@ -3152,7 +3158,7 @@ class GscNet():
         # mask_bias
         # NOTE: Harmony values of illegitimate bindings are assumed to be
         # smaller than or equal to -4.
-        self.train_opts['idx_mask_bias1'] = np.diag(self.bC) <= -4.
+        self.train_opts['idx_mask_bias1'] = self.bC <= -4.
         # self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
 
         # CRITICAL: Use .diagonal() for sparse matrices to avoid densification
@@ -3963,7 +3969,16 @@ class GscNet():
         if not JAX_AVAILABLE:
             print("JAX not available, falling back to CPU version")
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
-
+        # Check if WC is sparse - JAX doesn't support sparse matrices yet
+        from scipy import sparse
+        if sparse.issparse(self.WC):
+            print(
+                "WARNING: WC is sparse matrix - JAX acceleration not supported with sparse matrices.")
+            print(
+                "         Falling back to CPU version. Consider using use_jax=True during initialization")
+            print(
+                "         for JAX support, or use estimate_prob_inc() directly for CPU mode.")
+            return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
         # print(f"Running {num_trials} trials in parallel on GPU...")
         # t0 = time.time()
 
