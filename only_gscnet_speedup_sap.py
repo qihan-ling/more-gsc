@@ -1253,9 +1253,10 @@ class GscNet():
             self.update_scale_constants(pos=0)
 
         t0 = time.time()
+        print("  Computing equilibrium point (ep)...")
         self.get_ep(method=self.opts['ep_method'])
         dur = time.time() - t0
-        print('{} s for finding a global equilibrium point'.format(dur))
+        print('  {} s for finding a global equilibrium point'.format(dur))
 
         self.set_state(mu=self.ep)
         if qpolicy is None:
@@ -3921,14 +3922,16 @@ class GscNet():
         corpus['prob_sent'] = []
         self.actC_list = []
 
+        import time as time_module
         for trial_id in range(num_trials):
 
             if progress > 0:
                 if (trial_id + 1) % progress == 0:
-                    print('[%04d]' % (trial_id + 1), end='')
+                    print('[%04d]' % (trial_id + 1), end='', flush=True)
                     if (trial_id + 1) % (10 * progress) == 0:
                         print('')
 
+            trial_start = time_module.time()
             self.reset(mu=self.ep, sd=self.train_opts['init_noise_mag'])
             # self.opts['q_max'] = 15.
             # self.set_state(mu=self.ep, sd=self.train_opts['init_noise_mag'])
@@ -3949,6 +3952,11 @@ class GscNet():
             else:
                 idx = corpus['target'].index(list(self.actC))
                 corpus['count'][idx] += 1
+
+            # Report timing for every 100th trial
+            if progress > 0 and (trial_id + 1) % (10 * progress) == 0:
+                trial_time = time_module.time() - trial_start
+                print(f' [{trial_time:.2f}s/trial]')
 
         corpus['target'] = np.array(corpus['target'])
         corpus['count'] = np.array(corpus['count'])
