@@ -1606,7 +1606,7 @@ class GscNet():
         self.opts['scaling_factor'] = 0.
         self.opts['scale_type'] = 'diagonal'
         self.opts['ep_method'] = 'integration'
-        self.opts['use_runC'] = False
+        self.opts['use_runC'] = True  # Use runC() which works with sparse matrices
 
         self.opts['penalize_root_posN'] = True
         # JAX default
@@ -2963,6 +2963,19 @@ class GscNet():
         corpus['prob_sent'] /= corpus['prob_sent'].sum()
 
         return corpus
+
+    def run_prefix(self, prefix, update_q_discrete=False, log_trace=False):
+        """Run through a sequence of prefix words.
+
+        Args:
+            prefix: List of filler names for the prefix
+            update_q_discrete: Boolean for q update mode
+            log_trace: Whether to log traces
+        """
+        for wi, fname in enumerate(prefix):
+            self.run_word(
+                fname, wi + 1, update_q_discrete=update_q_discrete, log_trace=log_trace)
+            self.store.append({'actC': self.actC, 'q': self.q})
 
     def run_word(self, fname, wpos, symmetric=True, update_q_discrete=False, log_trace=False):
 
