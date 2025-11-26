@@ -1020,17 +1020,15 @@ if JAX_AVAILABLE:
         # Build filler type map for external input type expansion
         filler_type_map = _build_filler_type_map(net)
         """Extract network parameters into a JAX-compatible dictionary."""
-
-        # Convert sparse matrix to dense array for JAX compatibility
-        from scipy import sparse
-        WC_dense = net.WC.toarray() if sparse.issparse(net.WC) else net.WC
-
+        # NOTE: This function should only be called when net.WC is NOT sparse
+        # The calling function (estimate_prob_inc_jax) checks for sparse matrices
+        # and falls back to CPU version to avoid OOM errors
         params = {
             'num_bindings': net.num_bindings,
             'num_roles': net.num_roles,
             'num_fillers': net.num_fillers,
             'num_units': net.num_units,
-            'WC': jnp.array(WC_dense),
+            'WC': jnp.array(net.WC),
             'bC': jnp.array(net.bC),
             # External input strength
             'estr': float(net.estr[0]) if hasattr(net.estr, '__len__') else float(net.estr),
@@ -3967,6 +3965,14 @@ class GscNet():
         """
         if not JAX_AVAILABLE:
             print("JAX not available, falling back to CPU version")
+            return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
+
+        # Check if WC is sparse - JAX doesn't support sparse matrices yet
+        from scipy import sparse
+        if sparse.issparse(self.WC):
+            print("WARNING: WC is sparse matrix - JAX acceleration not supported with sparse matrices.")
+            print("         Falling back to CPU version. Consider using use_jax=True during initialization")
+            print("         for JAX support, or use estimate_prob_inc() directly for CPU mode.")
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
 
         # print(f"Running {num_trials} trials in parallel on GPU...")
