@@ -1,0 +1,288 @@
+575	NP -> DT NN
+473	PP -> IN NP
+337	 -> S
+337	S -> @S .
+206	S -> VP
+205	S -> NP VP
+193	NP -> @NP NN
+183	@S -> NP VP
+170	NP -> NP PP
+151	@S -> @S VP
+148	SBAR -> WHNP S
+138	NP -> DT NNS
+138	VP -> @VP PP
+131	WHNP -> WP
+121	@NP -> DT JJ
+116	@S -> @S NP
+113	VP -> VBD NP
+105	NP -> NP SBAR
+98	SBAR -> IN S
+94	ADVP -> RB
+69	NP -> JJ NNS
+65	@NP -> DT NN
+65	VP -> VBD VP
+64	NP -> NN
+63	NP -> PRP
+63	@VP -> VBD NP
+58	VP -> VBD SBAR
+57	@S -> PP ,
+55	NP -> NNP
+55	VP -> VBD
+53	@S -> SBAR ,
+52	NP -> JJ NN
+50	NP -> @NP SBAR
+47	@NP -> NP PP
+42	NP -> @NP NNS
+39	VP -> TO VP
+37	SBAR -> S
+34	VP -> VBD PP
+34	VP -> VBN NP
+32	VP -> VBZ
+31	SBAR -> WHADVP S
+30	VP -> @VP NP
+30	NP -> NNS
+30	PP -> TO NP
+28	WHADVP -> WRB
+28	VP -> VBD S
+26	NP -> PRP$ NN
+26	VP -> VBN
+23	VP -> @VP SBAR
+22	VP -> VBN PP
+22	@VP -> VBD ADVP
+22	NP -> NP VP
+21	ADJP -> RB JJ
+21	VP -> VBG NP
+21	PP -> IN S
+20	VP -> VBG PP
+18	VP -> VBZ NP
+18	@S -> SBAR NP
+16	@VP -> VBG ADVP
+16	@VP -> VBD ADJP
+15	VP -> @VP S
+15	ADJP -> JJ
+15	VP -> @VP VP
+13	PRT -> RP
+13	@NP -> @NP NN
+12	@VP -> VBZ NP
+12	@NP -> PRP$ JJ
+12	NP -> DT JJ
+12	VP -> MD VP
+12	VP -> VB NP
+12	@NP -> @NP JJ
+12	WHNP -> WDT
+11	PP -> @PP NP
+11	@ADJP -> RB JJ
+11	NP -> DT NNP
+10	NP -> @NP POS
+10	@NP -> DT NNP
+10	@VP -> VBD PP
+10	@S -> PP NP
+9	VP -> VBZ VP
+9	@VP -> VB PRT
+9	@VP -> VBG NP
+9	NP -> @NP NNP
+9	PP -> IN PP
+9	VP -> VBP NP
+9	ADVP -> RB RB
+8	NP -> PRP$ NNS
+8	NP -> JJR NN
+8	VP -> VB PP
+8	VP -> VBZ S
+8	NP -> JJR NNS
+8	@VP -> VBN NP
+8	@NP -> @NP CC
+8	@S -> NP ADVP
+8	S -> ADVP VP
+8	VP -> VBD ADJP
+8	@VP -> @VP ,
+7	@VP -> VBZ ADVP
+7	NP -> NP NN
+7	VP -> VBZ ADJP
+7	NP -> NNP NNP
+7	VP -> ADVP VBN
+7	@NP -> JJ NN
+7	@NP -> JJ JJ
+6	ADJP -> @ADJP PP
+6	NP -> NN NNS
+6	@VP -> VP CC
+6	NP -> JJ NNP
+6	@VP -> @VP NP
+6	@VP -> VBP NP
+6	VP -> VBN S
+6	ADJP -> @ADJP S
+6	VP -> VB
+6	@NP -> JJ JJR
+6	@NP -> NP ,
+6	VP -> VBG S
+5	VP -> VBG
+5	PP -> VBN NP
+5	NP -> NP ADJP
+5	@VP -> ADVP VBD
+5	NP -> NN NN
+5	@PP -> ADVP IN
+5	VP -> VBP
+5	ADJP -> JJ PP
+5	@VP -> VB NP
+5	@S -> S ,
+5	WHNP -> IN
+4	@VP -> VBZ ADJP
+4	@PP -> JJ TO
+4	SBAR -> @SBAR S
+4	ADJP -> @ADJP ADJP
+4	VP -> VBP S
+4	VP -> @VP ADVP
+4	ADVP -> IN DT
+4	VP -> VB VP
+4	NP -> DT
+3	@NP -> PRP$ NN
+3	@NP -> DT JJS
+3	@ADJP -> ADJP CC
+3	VP -> VBN VP
+3	VP -> NNS NP
+3	NP -> RB NN
+3	PP -> IN ADJP
+3	NP -> PRP DT
+3	@NP -> JJ NNS
+3	VP -> VBP PP
+3	@VP -> VBP PP
+3	@S -> @S ADVP
+3	PP -> @PP PP
+3	@PP -> PP CC
+3	VP -> VBP ADVP
+3	NP -> NP ADVP
+3	S -> @S VP
+3	NP -> @NP S
+3	@VP -> VBN ADVP
+3	S -> NP
+3	@VP -> @VP PP
+3	@NP -> @NP NP
+3	VP -> VB S
+3	@S -> @S S
+3	@VP -> @VP ADVP
+3	VP -> VB ADJP
+3	VP -> VBP VP
+3	NP -> QP NNS
+3	S -> NP ADJP
+2	@SBAR -> RB IN
+2	ADJP -> VBN
+2	WHADVP -> WRB JJ
+2	@SBAR -> IN IN
+2	@VP -> ADVP VB
+2	@PP -> IN IN
+2	VP -> VBD ADVP
+2	ADVP -> JJ
+2	PP -> VBG PP
+2	PP -> IN SBAR
+2	VP -> VBG VP
+2	@NP -> DT VBN
+2	@NP -> @NP CD
+2	VP -> VBN ADJP
+2	 -> SINV
+2	SINV -> @SINV .
+2	@SINV -> @SINV NP
+2	@SINV -> PP VP
+2	@NP -> DT ADJP
+2	NP -> EX
+2	@NP -> RB DT
+2	@S -> ADVP ,
+2	NP -> @NP ,
+2	@NP -> @NP NNP
+2	VP -> VBZ SBAR
+2	@VP -> VBN S
+2	@VP -> @VP VB
+2	ADJP -> ADJP PP
+2	ADJP -> RBR JJ
+2	@S -> @S CC
+2	@VP -> VBD RB
+2	VP -> VB ADVP
+2	S -> RB VP
+2	@NP -> NP JJ
+2	@VP -> @VP CC
+2	@VP -> VP ,
+2	VP -> VB PRT
+2	VP -> VBG SBAR
+2	NP -> @NP NNPS
+2	@NP -> NNP NNP
+2	NP -> @NP VP
+2	@VP -> ADVP VBN
+2	NP -> CD NNS
+2	NP -> JJ
+2	@NP -> NNP .
+2	VP -> VBP SBAR
+2	@NP -> PRP$ JJS
+1	@SINV -> @SINV VP
+1	@NP -> VBN JJ
+1	ADJP -> NN VBD
+1	@S -> ADVP NP
+1	@VP -> VBP ADVP
+1	NP -> NNS SBAR
+1	@VP -> MD ADVP
+1	@VP -> @VP VBN
+1	@VP -> VBN CC
+1	WHADVP -> RB WRB
+1	@VP -> VBG PP
+1	ADVP -> NP RB
+1	NP -> @NP CD
+1	@NP -> CD CD
+1	@NP -> @NP VP
+1	@VP -> VB ADVP
+1	@VP -> VBP ADJP
+1	@NP -> CD NN
+1	@VP -> VBD PRT
+1	@S -> NP ,
+1	@S -> S CC
+1	VP -> VBP ADJP
+1	NP -> RB JJ
+1	@VP -> MD RB
+1	@VP -> @VP RB
+1	@VP -> VB CC
+1	@VP -> @VP VP
+1	VP -> NN NP
+1	PP -> IN
+1	@ADJP -> RBR JJ
+1	@NP -> DT NNPS
+1	@NP -> @NP .
+1	QP -> RB CD
+1	@S -> @S PRN
+1	@S -> @S PP
+1	@NP -> DT CD
+1	PRN -> S ,
+1	NP -> RB CD
+1	QP -> JJ CD
+1	VP -> VBZ PP
+1	PP -> TO S
+1	ADJP -> @ADJP VBG
+1	@ADJP -> JJ CC
+1	S -> S VP
+1	VP -> VBG ADJP
+1	NP -> NP NP
+1	@NP -> @NP ,
+1	QP -> @QP CD
+1	@QP -> @QP DT
+1	@QP -> IN PDT
+1	S -> ADJP
+1	ADJP -> RB JJR
+1	@NP -> PRP$ VBN
+1	@NP -> NNS CC
+1	@VP -> VBN PRT
+1	ADJP -> JJ SBAR
+1	VP -> VBN SBAR
+1	@NP -> NP NNP
+1	@NP -> NN CC
+1	@VP -> VBN PP
+1	NP -> NP NNS
+1	@VP -> @VP ADJP
+1	ADVP -> ADVP PP
+1	ADVP -> RB RBR
+1	PP -> IN ADVP
+1	ADVP -> RBR
+1	@NP -> RB CD
+1	@S -> @S ,
+1	@S -> CC ADJP
+1	@ADJP -> @ADJP CC
+1	@ADJP -> JJ ,
+1	ADJP -> @ADJP JJ
+1	@ADJP -> RB RBR
+1	@NP -> DT VBG
+1	NP -> NNP POS
+1	NP -> @NP NP

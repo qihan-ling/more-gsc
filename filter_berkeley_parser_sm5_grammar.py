@@ -196,7 +196,6 @@ union_sap_parse_tag is {'PRP', 'PDT', 'JJR', 'JJ', 'FW', 'VBP', 'NP', ',', 'WDT'
 
 def get_sm5_grammar(filepath):
     """
-    Reads a text file where each line is a word and returns a list of words.
 
     Args:
         filepath (str): The path to the text file.
