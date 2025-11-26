@@ -2371,12 +2371,17 @@ if JAX_AVAILABLE:
         # Build filler type map for external input type expansion
         filler_type_map = _build_filler_type_map(net)
         """Extract network parameters into a JAX-compatible dictionary."""
+
+        # Convert sparse matrix to dense array for JAX compatibility
+        from scipy import sparse
+        WC_dense = net.WC.toarray() if sparse.issparse(net.WC) else net.WC
+
         params = {
             'num_bindings': net.num_bindings,
             'num_roles': net.num_roles,
             'num_fillers': net.num_fillers,
             'num_units': net.num_units,
-            'WC': jnp.array(net.WC),
+            'WC': jnp.array(WC_dense),
             'bC': jnp.array(net.bC),
             # External input strength
             'estr': float(net.estr[0]) if hasattr(net.estr, '__len__') else float(net.estr),
