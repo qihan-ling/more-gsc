@@ -1,0 +1,16 @@
+# Add these debug prints in train2() after line 3718 (after the WC update)
+# This will help us understand what's happening
+
+# After self._set_weights() around line 3718, add:
+if self.epoch_num == 1:
+    print(f"\n=== DEBUG EPOCH 1 ===")
+    print(f"dWC min/max/mean: {dWC.min():.6f} / {dWC.max():.6f} / {dWC.mean():.6f}")
+    print(f"WC min/max/mean: {self.WC.min():.6f} / {self.WC.max():.6f} / {self.WC.mean():.6f}")
+    print(f"lrate: {self.train_opts['lrate']}")
+    print(f"use_sparse: {getattr(self, 'use_sparse', False)}")
+    print(f"use_second_order_bias: {self.opts['use_second_order_bias']}")
+    print(f"maskWC_update is None: {maskWC_update is None}")
+    if maskWC_update is not None:
+        print(f"maskWC_update sum: {maskWC_update.sum() if hasattr(maskWC_update, 'sum') else 'N/A'}")
+    print(f"mask0 nonzero count: {(self.train_opts['mask0'] != 0).sum() if hasattr(self.train_opts['mask0'], 'sum') else 'sparse'}")
+    print("===================\n")
