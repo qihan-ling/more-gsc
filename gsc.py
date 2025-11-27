@@ -6254,6 +6254,20 @@ class GscNet():
                 dq = -err['ent_diff'] * self.train_opts['coef_q']
                 # print(dq)
 
+            # FIX: Compute dbC gradients when use_second_order_bias=False
+            # When use_second_order_bias=True, bias is encoded in WC diagonal,
+            # so we don't need separate dbC gradients
+            if not self.opts['use_second_order_bias']:
+                # Compute first-order bias gradients from tree probabilities
+                if self.train_opts['coef']['trees'] > 0.:
+                    for key, val in err['trees'].items():
+                        if key in keys_tree:
+                            if self.train_opts['err_tree_positive_only']:
+                                val = max(val, 0.)
+                            state = np.zeros(self.num_bindings)
+                            state[list(key)] = 1.
+                            dbC += state * val * self.train_opts['coef']['trees']
+
         return dWC, destr, dq, dbC
 
     def update_train_opts(self, train_opts):
