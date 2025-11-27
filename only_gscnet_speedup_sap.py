@@ -3668,6 +3668,12 @@ class GscNet():
                             # NumPy Adam update (original code)
                             # if self.train_opts['optimizer'] == 'adam':
                             # TODO: Add the weight decay term
+
+                            # CRITICAL FIX: Convert dWC from DOK to CSR before arithmetic
+                            # Mixing DOK and CSR silently produces incorrect results!
+                            if hasattr(self, 'use_sparse') and self.use_sparse:
+                                dWC = dWC.tocsr()
+
                             self.optim['M_WC'] = self.optim['beta1'] * \
                                 self.optim['M_WC'] + \
                                 (1. - self.optim['beta1']) * dWC
@@ -3695,6 +3701,12 @@ class GscNet():
                         self._set_weights()
                     else:
                         # SGD update - handle sparse mask
+
+                        # CRITICAL FIX: Convert dWC from DOK to CSR before arithmetic
+                        if hasattr(self, 'use_sparse') and self.use_sparse:
+                            dWC = dWC.tocsr()
+                            if not isinstance(weight_decay, (int, float)) and hasattr(weight_decay, 'tocsr'):
+                                weight_decay = weight_decay.tocsr()
                         if maskWC_update is None:
                             # No mask (all ones) - apply update directly
                             self.WC += self.train_opts['lrate'] * \
