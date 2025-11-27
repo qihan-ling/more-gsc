@@ -35,8 +35,26 @@ if 'trees' in stat_Q:
 
     # Match stat_Q trees to corpus sentences
     for si, sent in enumerate(net.corpus['sentence']):
-        sent_tuple = tuple([net.binding_names.index(bname) for bname in sent])
-        model_prob = stat_Q['trees'].get(sent_tuple, 0.0)
+        # Try to find the sentence in stat_Q trees
+        # The keys in stat_Q['trees'] are tuples of binding indices
+        try:
+            sent_tuple = tuple([net.binding_names.index(bname) for bname in sent])
+            model_prob = stat_Q['trees'].get(sent_tuple, 0.0)
+        except (ValueError, AttributeError):
+            # If exact match fails, try to find by matching structure
+            model_prob = 0.0
+            sent_str_key = ' '.join([bname.split('/')[0] for bname in sent])
+            # Search through stat_Q trees to find matching sentence
+            for tree_key, prob in stat_Q['trees'].items():
+                try:
+                    tree_sent = [net.binding_names[idx] for idx in tree_key]
+                    tree_str = ' '.join([bname.split('/')[0] for bname in tree_sent])
+                    if tree_str == sent_str_key:
+                        model_prob = prob
+                        break
+                except:
+                    pass
+
         target_prob = net.corpus['prob_sent'][si]
         sent_str = ' '.join([bname.split('/')[0] for bname in sent])
         print(f"     Sent {si}: Q={model_prob:.4f} (target P={target_prob:.4f})  {sent_str}")
