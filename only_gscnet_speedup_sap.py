@@ -2242,7 +2242,6 @@ class GscNet():
             new_diag = current_diag + diag_values
             # Set diagonal elements individually (works with any sparse format)
             self.WC.setdiag(new_diag)
-            self.WC.setdiag(self.WC.diagonal() + diag_values)
         else:
             # Dense matrix: standard numpy operation
             self.WC = self.WC + np.diag(2 * self.bC)
