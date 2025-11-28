@@ -1145,6 +1145,7 @@ class GscNet():
                     (self.num_bindings, self.num_bindings), dtype=np.float64)
 
                 self.use_sparse = True
+                print("__init__ sets use_sparse to be True")
             else:
                 self.WC = np.zeros((self.num_bindings, self.num_bindings))
                 self.use_sparse = False

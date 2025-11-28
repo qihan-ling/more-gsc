@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import only_gscnet_speedup_sap as gsc
 import numpy as np
-# with open('collapsed_filtered_sm5.grammar', 'r') as f:
+#with open('collapsed_filtered_sm5.grammar', 'r') as f:
 #    PCFG_sap = f.read()
 
 PCFG_G1 = '''
@@ -44,12 +44,13 @@ net_opts = {
     'm': 30,             # resource constraint (Hq1 strength)
     'use_runC': True,    # use C implementation for speed
     'ep_method': 'integration',
+    'use_sparse_wc': True,
 }
 
 encodings = {
     'similarity': sim,
-    # 'dim_f': 150,  # Compressed encoding
-    # 'dim_r': 60
+    #'dim_f': 150,  # Compressed encoding
+    #'dim_r': 60
 }
 
 # Initialize network
@@ -107,6 +108,9 @@ print("="*70)
 # Train for sufficient epochs to reach convergence
 n_epochs = 1000
 
+#exec(open('debug_training_update.py').read())
+#exec(open('debug_weight_update.py').read())
+#exec(open('debug_across_10epoch_update.py').read())
 for epoch_block in range(n_epochs // 5):
     net.train2(
         train_opts={'num_epochs': 5},
@@ -347,3 +351,4 @@ for si, filename in enumerate(filenames):
     print(f"  - {filename}{marker}")
 print("="*70)
 print(f"Finished running at {time.time()-t0:.2f}s")
+
