@@ -4469,6 +4469,11 @@ class GscNet():
             for key in keys_treelet:
                 keys_binding += list(key)
 
+            # Initialize triplet accumulators for sparse gradient construction
+            # Accumulate all gradients then build one COO matrix at the end
+            if hasattr(self, 'use_sparse') and self.use_sparse and not self.use_jax:
+                grad_rows, grad_cols, grad_vals = [], [], []
+
             if self.train_opts['coef']['trees'] > 0.:
                 for key, val in err['trees'].items():
 
@@ -4493,9 +4498,8 @@ class GscNet():
                             #     self.train_opts['coef']['trees']
                             # For sparse matrices, avoid np.outer() which creates dense matrix
                             if hasattr(self, 'use_sparse') and self.use_sparse:
-                                # OPTIMIZED: Extract sparse submatrix and get only non-zero entries
-                                # This is ~50x faster than meshgrid approach for sparse masks
-                                from scipy import sparse as sp
+                                # OPTIMIZED: Accumulate triplets, build COO matrix once at end
+                                # Extract sparse submatrix and get only non-zero entries
                                 coef_val = val * self.train_opts['coef']['trees']
 
                                 # Extract submatrix corresponding to key_idx (sparse operation)
@@ -4509,17 +4513,12 @@ class GscNet():
                                 valid_rows = key_idx[sub_rows]
                                 valid_cols = key_idx[sub_cols]
 
-                                if len(valid_rows) > 0:
-                                    valid_data = np.full(len(valid_rows), coef_val, dtype=np.float64)
-
-                                    # Create COO matrix for this gradient contribution
-                                    grad_coo = sp.coo_matrix(
-                                        (valid_data, (valid_rows, valid_cols)),
-                                        shape=dWC.shape
-                                    )
-
-                                    # Add to gradient accumulator
-                                    dWC = dWC + grad_coo
+                                # Accumulate triplets instead of building COO per tree
+                                n_valid = len(valid_rows)
+                                if n_valid > 0:
+                                    grad_rows.extend(valid_rows.tolist())
+                                    grad_cols.extend(valid_cols.tolist())
+                                    grad_vals.extend([coef_val] * n_valid)
                             else:
                                 state = np.zeros(self.num_bindings)
                                 state[key_idx] = 1.
@@ -4540,6 +4539,18 @@ class GscNet():
                             else:
                                 destr[idx_tb] += extC_token[idx_tb] * \
                                     val * self.train_opts['coef']['trees']
+
+                # Build COO matrix from accumulated triplets (all trees at once)
+                if hasattr(self, 'use_sparse') and self.use_sparse and not self.use_jax:
+                    if len(grad_rows) > 0:
+                        from scipy import sparse as sp
+                        # Build single COO matrix from all accumulated gradients
+                        dWC = sp.coo_matrix(
+                            (grad_vals, (grad_rows, grad_cols)),
+                            shape=self.WC.shape,
+                            dtype=np.float64
+                        )
+                    # else dWC remains as initialized dok_matrix with all zeros
 
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():
