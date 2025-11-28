@@ -1771,7 +1771,7 @@ class GscNet():
         self.C_T = self.C.T
 
         # Convert to JAX if using GPU
-        if self.use_jax:  # QI's TODO: use_jax not defined yet
+        if self.use_jax:
             print("  Converting change-of-basis matrices to GPU...")
             # Use float32 for GPU efficiency (or float64 if precision critical)
             self.C = jnp.array(self.C, dtype=jnp.float32)
@@ -1806,7 +1806,14 @@ class GscNet():
         H_nonterminal_illegitimate = self.hg.opts['H_nonterminal_illegitimate']
         H_copy_illegitimate = self.hg.opts['H_copy_illegitimate']
 
-        # self.WC = np.zeros((self.num_bindings, self.num_bindings))
+        is_sparse = hasattr(self, 'use_sparse') and self.use_sparse
+
+        if is_sparse:
+            print("  Initializing WC as LIL matrix for efficient construction...")
+            self.WC = sparse.lil_matrix(
+                (self.num_bindings, self.num_bindings), dtype=np.float64)
+        else:
+            self.WC = np.zeros((self.num_bindings, self.num_bindings))
 
         # t1 = time.time()
         # Binary and copy rules =========================
@@ -1872,12 +1879,8 @@ class GscNet():
                             continue
 
                         # Direct matrix update without string operations
-                        if is_sparse:
-                            self.WC[idx1, idx2] = self.WC[idx1, idx2] + H
-                            self.WC[idx2, idx1] = self.WC[idx2, idx1] + H
-                        else:
-                            self.WC[idx1, idx2] += H
-                            self.WC[idx2, idx1] += H
+                        self.WC[idx1, idx2] += H
+                        self.WC[idx2, idx1] += H
                         update_count += 1
         # dur = time.time() - t1
         # print('{} ms for implementing binrary HG rules'.format(dur))
@@ -2037,7 +2040,7 @@ class GscNet():
                         self.set_bias(bnames, H_copy_illegitimate, c2n=False)
         # Convert WC to CSR BEFORE matrix multiplication (critical for performance!)
         if hasattr(self, 'use_sparse') and self.use_sparse:
-            print(f"    Converting WC from dok_matrix to CSR for efficient operations...")
+            print(f"    Converting WC from Lil to CSR for efficient operations...")
             t_convert = time.time()
             self.WC = self.WC.tocsr()
             nnz = self.WC.nnz
@@ -2236,11 +2239,16 @@ class GscNet():
         if hasattr(self, 'use_sparse') and self.use_sparse:
             # Sparse matrix: add to diagonal efficiently
             diag_values = 2 * self.bC
+            # Convert to lil for efficient diagonal modification
+            # if not sparse.isspmatrix_lil(self.WC):
+            #    self.WC = self.WC.tolil()
+            # Add to existing diagonal
+            # self.WC.setdiag(self.WC.diagonal() + diag_values)
             # FIXED: Use setdiag() for fast diagonal modification on CSR matrices
             # setdiag() is optimized for all scipy sparse formats
+            print("DEBUG: bias2weight")
             current_diag = self.WC.diagonal()
             new_diag = current_diag + diag_values
-            # Set diagonal elements individually (works with any sparse format)
             self.WC.setdiag(new_diag)
         else:
             # Dense matrix: standard numpy operation
@@ -2749,8 +2757,10 @@ class GscNet():
 
         if max_sent_len is None:
             max_sent_len = self.hg.opts['max_sent_len']
+
         print(f"Generating corpus with {nsamples} samples...")
         t_start = time.time()
+
         sentences = []
         targets = []
         pvals = []
@@ -2961,6 +2971,13 @@ class GscNet():
         return corpus
 
     def run_prefix(self, prefix, update_q_discrete=False, log_trace=False):
+        """Run through a sequence of prefix words.
+
+        Args:
+            prefix: List of filler names for the prefix
+            update_q_discrete: Boolean for q update mode
+            log_trace: Whether to log traces
+        """
         for wi, fname in enumerate(prefix):
             self.run_word(
                 fname, wi + 1, update_q_discrete=update_q_discrete, log_trace=log_trace)
@@ -3045,13 +3062,16 @@ class GscNet():
                 self.converged = True
 
     def initialize(self, train_opts=None):
-
+        print("DEBUG: initialize")
         self.WC = self.params_backup['WC'].copy()
         self.bC = self.params_backup['bC'].copy()
         self.estr = self.params_backup['estr'].copy()
         self.qpolicy = self.params_backup['qpolicy'].copy()
+        print("DEBUG: setting weights")
         self._set_weights()
+        print("DEBUG: setting biases")
         self._set_biases()
+        print("DEBUG: update bowl strength")
         self.update_bowl_strength()
         self.ep = self.params_backup['ep'].copy()
         # self.get_ep(method=self.opts['ep_method'])
@@ -3064,7 +3084,7 @@ class GscNet():
         self.nonzero_all1 = False
         # number of treelet frames to update in each iteration (asynchronous update)
         self.num_treelets_update = max(self.num_roles//4, 1)
-
+        print("DEBUG: setting self.train_opts")
         # Set train_opts to default values
         self.train_opts = {}
         self.train_opts['report_cycle'] = 1
@@ -3157,15 +3177,18 @@ class GscNet():
         # mask_bias
         # NOTE: Harmony values of illegitimate bindings are assumed to be
         # smaller than or equal to -4.
+        print("DEBUG: harmoney values of illegitimate bindings set to <=4 ")
         self.train_opts['idx_mask_bias1'] = self.bC <= -4.
         # self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
-
+        print("DEBUG: <= 8")
         # CRITICAL: Use .diagonal() for sparse matrices to avoid densification
         if hasattr(self, 'use_sparse') and self.use_sparse:
             self.train_opts['idx_mask_bias2'] = self.WC.diagonal() <= -8.
         else:
             self.train_opts['idx_mask_bias2'] = np.diag(self.WC) <= -8.
+
         # Update train_opts
+        print("DEBUG: update train_opts")
         if train_opts is not None:
             self.update_train_opts(train_opts)
 
@@ -3176,13 +3199,13 @@ class GscNet():
 
         if self.train_opts['optimizer'] == 'adam':
             self.optim = {}
+            print("DEBUG: adam optim setup")
             # self.optim['M_WC'] = np.zeros_like(self.WC)
             # self.optim['M_bC'] = np.zeros_like(self.bC)
             # Handle sparse matrices properly
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # For sparse matrices, create sparse optimizer states
                 print("  Initializing sparse optimizer states for Adam...")
-                from scipy import sparse
                 # Use CSR format directly for efficiency (WC is already in CSR format)
                 self.optim['M_WC'] = sparse.csr_matrix(
                     self.WC.shape, dtype=np.float64)
@@ -3257,7 +3280,6 @@ class GscNet():
                 # Process roles in batches, building and accumulating CSR matrices incrementally
                 mask0 = sparse.csr_matrix(self.WC.shape, dtype=np.float64)
 
-                # Collect all (row, col) pairs first using vectorized operations
                 batch_size = 10  # Process 10 roles at a time
                 non_terminal_roles = [ri for ri in range(len(self.hg.role_names))
                                       if not self.hg.roles.role_is_terminal[ri]]
@@ -3706,6 +3728,7 @@ class GscNet():
                             dWC = dWC.tocsr()
                             if not isinstance(weight_decay, (int, float)) and hasattr(weight_decay, 'tocsr'):
                                 weight_decay = weight_decay.tocsr()
+
                         if maskWC_update is None:
                             # No mask (all ones) - apply update directly
                             self.WC += self.train_opts['lrate'] * \
@@ -3980,8 +4003,8 @@ class GscNet():
         if not JAX_AVAILABLE:
             print("JAX not available, falling back to CPU version")
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
+
         # Check if WC is sparse - JAX doesn't support sparse matrices yet
-        from scipy import sparse
         if sparse.issparse(self.WC):
             print(
                 "WARNING: WC is sparse matrix - JAX acceleration not supported with sparse matrices.")
@@ -3990,6 +4013,7 @@ class GscNet():
             print(
                 "         for JAX support, or use estimate_prob_inc() directly for CPU mode.")
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
+
         # print(f"Running {num_trials} trials in parallel on GPU...")
         # t0 = time.time()
 
@@ -4169,6 +4193,9 @@ class GscNet():
             binding_names = binding_names_new
 
         idx = self.find_bindings_fast(binding_names)
+        if len(idx) == 0:
+            print(f"WARNING: No bindings found for input: {binding_names}")
+            print(f"Sample valid binding: {self.binding_names[0]}")
         if self.use_jax:
             # JAX version: use JAX arrays
             curr_extC = jnp.zeros(self.num_bindings, dtype=jnp.float32)
@@ -4489,8 +4516,8 @@ class GscNet():
                             # state = np.zeros(self.num_bindings)
                             # state[key_idx] = 1.
                             # dWC += np.outer(state, state) * \
-                            #     self.train_opts['mask0'] * val * \
-                            #     self.train_opts['coef']['trees']
+                            #    self.train_opts['mask0'] * val * \
+                            #    self.train_opts['coef']['trees']
                             # For sparse matrices, avoid np.outer() which creates dense matrix
                             if hasattr(self, 'use_sparse') and self.use_sparse:
                                 # Compute gradient coefficient
@@ -4772,7 +4799,10 @@ class GscNet():
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # Sparse: set diagonal to zero
                 WC0 = self.WC.copy()
-                # Set diagonal elements to 0 individually (works with any sparse format)
+                # if not sparse.isspmatrix_lil(WC0):
+                #    WC0 = WC0.tolil()
+                # WC0.setdiag(0)
+
                 WC0.setdiag(0)
             else:
                 # Dense: standard subtraction
@@ -4821,6 +4851,9 @@ class GscNet():
             # Add new diagonal - works for both dense and sparse
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # Sparse: set new diagonal
+                # if not sparse.isspmatrix_lil(WC0):
+                #    WC0 = WC0.tolil()
+                # WC0.setdiag(bC_new)
                 # FIXED: Use setdiag() for fast diagonal modification on CSR matrices
                 WC0.setdiag(bC_new)
                 self.WC = WC0
@@ -5074,6 +5107,8 @@ class GscNet():
 
             self.extC *= decay_factor
             self.set_input(bname, use_type=use_type, cumulative=True)
+            if self.extC.max() == 0:
+                print(f"CRITICAL: Input extC is ZERO for word {bname}")
             if self.opts['use_runC']:
                 if word_rt[ii] <= word_rt0[ii]:
                     self.runC(word_rt[ii], log_trace=False)
