@@ -44,7 +44,7 @@ net_opts = {
     'm': 30,             # resource constraint (Hq1 strength)
     'use_runC': True,    # use C implementation for speed
     'ep_method': 'integration',
-    'use_sparse_wc': True,
+    # 'use_sparse_wc': True,  # Commented out - let auto-detection choose optimal mode
 }
 
 encodings = {
