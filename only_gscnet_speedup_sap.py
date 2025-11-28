@@ -4493,16 +4493,35 @@ class GscNet():
                             #     self.train_opts['coef']['trees']
                             # For sparse matrices, avoid np.outer() which creates dense matrix
                             if hasattr(self, 'use_sparse') and self.use_sparse:
-                                # Compute gradient coefficient
-                                coef_val = val * \
-                                    self.train_opts['coef']['trees']
-                                # Directly update sparse matrix at (i,j) for all i,j in key_idx
-                                # This is equivalent to outer(state, state) but sparse-friendly
-                                for i in key_idx:
-                                    for j in key_idx:
-                                        # Check mask0 before updating (mask0 is sparse)
-                                        if self.train_opts['mask0'][i, j] != 0:
-                                            dWC[i, j] = dWC[i, j] + coef_val
+                                # OPTIMIZED: Use vectorized operations + COO batch update
+                                from scipy import sparse as sp
+                                coef_val = val * self.train_opts['coef']['trees']
+
+                                # Create all (i,j) pairs using meshgrid (vectorized)
+                                rows, cols = np.meshgrid(key_idx, key_idx, indexing='ij')
+                                rows_flat = rows.ravel()
+                                cols_flat = cols.ravel()
+
+                                # Filter by mask0: get mask values for all pairs at once
+                                # Use CSR format for fast batch indexing
+                                mask0_csr = self.train_opts['mask0'].tocsr()
+                                # Use advanced indexing for batch lookup (much faster than loop)
+                                mask_values = mask0_csr[rows_flat, cols_flat].A1  # .A1 converts to 1D array
+                                valid_mask = mask_values != 0
+
+                                if valid_mask.any():
+                                    valid_rows = rows_flat[valid_mask]
+                                    valid_cols = cols_flat[valid_mask]
+                                    valid_data = np.full(len(valid_rows), coef_val, dtype=np.float64)
+
+                                    # Create COO matrix for this gradient contribution
+                                    grad_coo = sp.coo_matrix(
+                                        (valid_data, (valid_rows, valid_cols)),
+                                        shape=dWC.shape
+                                    )
+
+                                    # Add to gradient accumulator (convert to same format)
+                                    dWC = dWC + grad_coo
                             else:
                                 state = np.zeros(self.num_bindings)
                                 state[key_idx] = 1.
