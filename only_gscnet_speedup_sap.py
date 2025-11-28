@@ -4339,10 +4339,15 @@ class GscNet():
             destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
             dq = jnp.zeros(self.num_roles, dtype=jnp.float32)
         else:
-            # For sparse training: accumulate triplets, build COO once at end
-            grad_rows = []
-            grad_cols = []
-            grad_vals = []
+            # Initialize based on whether we're using sparse matrices
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse training: accumulate triplets, build COO once at end
+                grad_rows = []
+                grad_cols = []
+                grad_vals = []
+            else:
+                # For dense matrices: initialize gradient array
+                dWC = np.zeros(self.WC.shape)
 
             dbC = np.zeros(self.bC.shape)
             destr = np.zeros(self.estr.shape)
