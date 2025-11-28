@@ -1801,7 +1801,9 @@ class GscNet():
         role_system = self.hg.opts['role_system']
         roles = self.hg.roles
         bsep = self.hg.opts['bsep']
-
+        rname_terminal = np.where(self.hg.roles.role_is_terminal)[0]
+        self.idx_terminal = np.concatenate([self.role_to_binding_indices[ri]
+                                            for ri in rname_terminal])
         H_root_illegitimate = self.hg.opts['H_root_illegitimate']
         H_terminal_illegitimate = self.hg.opts['H_terminal_illegitimate']
         H_nonterminal_illegitimate = self.hg.opts['H_nonterminal_illegitimate']
@@ -2319,7 +2321,7 @@ class GscNet():
         '''
         # Skip for sparse matrices - W is never used and causes OOM
         if hasattr(self, 'use_sparse') and self.use_sparse:
-            print("      Skipping W computation (not needed for sparse matrices)")
+            # print("      Skipping W computation (not needed for sparse matrices)")
             self.W = None
             return
 
@@ -2336,7 +2338,7 @@ class GscNet():
         '''
         # Skip for sparse matrices - b is never used
         if hasattr(self, 'use_sparse') and self.use_sparse:
-            print("      Skipping b computation (not needed for sparse matrices)")
+            # print("      Skipping b computation (not needed for sparse matrices)")
             self.b = None
             return
 
@@ -2941,7 +2943,7 @@ class GscNet():
                         stat['binding_pairs'][pair_r] += p
                     else:
                         stat['binding_pairs'][pair_r] = p
-
+        # print(f"get_corpus_stat returns stat is of type {type(stat)}")
         return stat
 
     def subset_corpus(self, bnames):
@@ -3475,9 +3477,14 @@ class GscNet():
                     if JAX_AVAILABLE:
                         stat_Q = self.estimate_prob_inc_jax(
                             prefix=prefix, num_trials=self.train_opts['num_trials'])
+                        # print(
+                        #     f"after estimate_prob_inc_jax, stat_Q is of type {type(stat_Q)}")
                     else:
-                        stat_Q, actC_set = self.estimate_prob_inc(
+                        # stat_Q, actC_set = self.estimate_prob_inc(
+                        stat_Q = self.estimate_prob_inc(
                             prefix=prefix, num_trials=self.train_opts['num_trials'])
+                        # print(
+                        #     f"after estimate_prob_inc, stat_Q is of type {type(stat_Q)}")
                     if self.train_opts['ema_stat_weight'] > 0:
                         if hasattr(self, 'stat_Q_prev'):
                             stat_Q_new = self.ema_stat(
@@ -3496,6 +3503,7 @@ class GscNet():
                         extC_token = (self.extC != 0).astype(jnp.int32)
                     else:
                         extC_token = self.extC.astype(bool).astype(int)
+                    # print(f"stat_Q_new is of type {type(stat_Q_new)}")
                     kl_curr, xent_curr, err, err_log = self.cost(
                         stat_P, stat_Q_new)
                     self.stat_Q_prev = stat_Q_new  #
@@ -3976,10 +3984,12 @@ class GscNet():
         corpus['target'] = np.array(corpus['target'])
         corpus['count'] = np.array(corpus['count'])
         corpus['prob_sent'] = corpus['count'] / corpus['count'].sum()
-
+        # print("runnign get_corpus_stat in prob_inc()")
         stat = self.get_corpus_stat(corpus)
-        return stat, np.array(self.actC_list)
-
+        # print(
+        #     f"saved stat after get_corpus_stat in prob_inc() is of type {type(stat)}")
+        # return stat, np.array(self.actC_list)
+        return stat
         # self.actC_list = np.array(self.actC_list)
         # self.prob_bindings = actC_mean / num_trials
 
@@ -4007,12 +4017,12 @@ class GscNet():
 
         # Check if WC is sparse - JAX doesn't support sparse matrices yet
         if sparse.issparse(self.WC):
-            print(
-                "WARNING: WC is sparse matrix - JAX acceleration not supported with sparse matrices.")
-            print(
-                "         Falling back to CPU version. Consider using use_jax=True during initialization")
-            print(
-                "         for JAX support, or use estimate_prob_inc() directly for CPU mode.")
+            # print(
+            #     "WARNING: WC is sparse matrix - JAX acceleration not supported with sparse matrices.")
+            # print(
+            #     "         Falling back to CPU version. Consider using use_jax=True during initialization")
+            # print(
+            #     "         for JAX support, or use estimate_prob_inc() directly for CPU mode.")
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
 
         # print(f"Running {num_trials} trials in parallel on GPU...")
@@ -4227,8 +4237,10 @@ class GscNet():
             xent[obj] = 0.
             err[obj] = {}
             err_log[obj] = {}
-
+            # print(f"DEBUG: obj is {obj} of type {type(obj)}")
             keys1 = [key for key in stat_P[obj]]
+            # print(
+            # f"DEBUG: stat_Q is of type {type(stat_Q)}")
             keys2 = [key for key in stat_Q[obj]]
 
             if (obj == "trees") and (self.train_opts['use_err_gram_only']):
@@ -4320,7 +4332,6 @@ class GscNet():
 
         Performance: ~1-2ms for gradient computation (vs 1000-2000ms with nested loops)
         """
-
         # Initialize gradients
         if self.use_jax:
             dWC = jnp.zeros(self.WC.shape, dtype=jnp.float32)
@@ -4414,9 +4425,8 @@ class GscNet():
                         # Update estr if needed
                         if self.train_opts['update_estr']:
                             if self.train_opts['update_estr_terminals_only']:
-                                idx_terminal = self.get_terminal_binding_idx()
                                 idx_tb = [ii for ii in list(
-                                    key) if ii in idx_terminal]
+                                    key) if ii in self.idx_terminal]
                             else:
                                 idx_tb = list(key)
                             idx_tb = np.array(idx_tb, dtype=np.int32)
@@ -4477,9 +4487,8 @@ class GscNet():
 
                 # Process binding gradients within treelets
                 if keys_binding:
-                    idx_terminal = self.get_terminal_binding_idx()
                     for key, val in err['bindings'].items():
-                        if key in keys_binding and key in idx_terminal:
+                        if key in keys_binding and key in self.idx_terminal:
                             coef_val = val * \
                                 self.train_opts['coef']['treelets']
 
@@ -4860,13 +4869,13 @@ class GscNet():
         # For sparse matrices, use scipy.sparse.linalg.eigsh to compute only largest eigenvalue
         if hasattr(self, 'use_sparse') and self.use_sparse:
             from scipy.sparse.linalg import eigsh
-            print("    Computing largest eigenvalue of sparse WC for bowl strength...")
+            # print("    Computing largest eigenvalue of sparse WC for bowl strength...")
             try:
                 # Compute only the largest eigenvalue (k=1, which='LA')
                 # This is MUCH faster than computing all eigenvalues
                 eig_max = eigsh(self.WC, k=1, which='LA',
                                 return_eigenvectors=False)[0]
-                print(f"      Largest eigenvalue: {eig_max:.6f}")
+                # print(f"      Largest eigenvalue: {eig_max:.6f}")
             except Exception as e:
                 print(
                     f"      Warning: eigsh failed ({e}), using default bowl strength")
