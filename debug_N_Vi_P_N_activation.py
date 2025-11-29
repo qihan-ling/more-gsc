@@ -1,6 +1,6 @@
 """Debug script to trace treelet construction for role (3,2)"""
 
-import only_gscnet as gsc
+import only_gscnet_speedup as gsc
 
 import numpy as np
 
@@ -10,8 +10,8 @@ import numpy as np
 print("Loading model...")
 
 #net = gsc.load_model('g1_ds_speedup_model_copy.pkl')
-net = gsc.load_model('g1_ds_speedup_model_copy_trainjax.pkl')
-
+#net = gsc.load_model('g1_ds_speedup_model_copy_trainjax.pkl')
+net = gsc.load_model('ds_jax_sap_test_on_g1_model.pkl')
 print("\n" + "="*70)
 
 print("Debugging treelet construction for role (3,2)")
