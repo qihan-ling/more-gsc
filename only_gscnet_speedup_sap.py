@@ -4917,9 +4917,17 @@ class GscNet():
                 # Fallback: use a conservative estimate based on matrix norm
                 eig_max = 0.0  # Will be overridden by other conditions or default
         else:
-            # Dense matrices: use full eigenvalue decomposition
-            eigvals, eigvecs = np.linalg.eigh(self.WC)
-            eig_max = max(eigvals)
+            # Dense matrices: Only compute largest eigenvalue (much faster!)
+            # Using scipy.sparse.linalg.eigsh even for dense matrices
+            from scipy.sparse.linalg import eigsh
+            try:
+                # eigsh works on dense matrices too, and is faster when k << n
+                eig_max = eigsh(self.WC, k=1, which='LA',
+                                return_eigenvectors=False)[0]
+            except:
+                # Fallback: use full decomposition (slow but reliable)
+                eigvals, eigvecs = np.linalg.eigh(self.WC)
+                eig_max = max(eigvals)
 
         if np.sum(abs(self.bowl_center)) > 0:
             # TODO(PWC) Check there is only one binding
