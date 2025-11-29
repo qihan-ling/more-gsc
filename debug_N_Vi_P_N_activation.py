@@ -1,7 +1,7 @@
 """Debug script to trace treelet construction for role (3,2)"""
 
-import only_gscnet_speedup as gsc
-
+#import only_gscnet_speedup as gsc
+import only_gscnet_speedup_sap as gsc
 import numpy as np
 
 
