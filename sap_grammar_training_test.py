@@ -19,7 +19,7 @@ PCFG_G1 = '''
 '''
 
 ROOT = 'S'
-MAXLEN = 24
+MAXLEN = 5
 
 # ============================================================================
 # Initialize network with paper's specifications
@@ -49,8 +49,8 @@ net_opts = {
 
 encodings = {
     'similarity': sim,
-    #'dim_f': 150,  # Compressed encoding
-    #'dim_r': 60
+    'dim_f': 150,  # Compressed encoding
+    'dim_r': 60
 }
 
 # Initialize network
@@ -114,7 +114,7 @@ n_epochs = 1000
 for epoch_block in range(n_epochs // 5):
     net.train2(
         train_opts={'num_epochs': 5},
-        savefilename='ds_jax_sap_test_on_g1_model.pkl'
+        savefilename='ds_jax_sap_test_on_g1_model2.pkl'
     )
 
 print("\n" + "="*70)
@@ -140,7 +140,7 @@ for si, prob in enumerate(final_probs):
 # Plot Figure 11 (Training dynamics)
 # ============================================================================
 
-net = gsc.load_model('ds_jax_sap_test_on_g1_model.pkl')
+net = gsc.load_model('ds_jax_sap_test_on_g1_model2.pkl')
 
 # FIXED: plot_train_result() doesn't return a figure object and calls plt.show()
 # internally, so we just call it directly
@@ -242,7 +242,7 @@ plt.legend(loc='best', fontsize=10, framealpha=0.9)
 plt.grid(True, alpha=0.3)
 plt.ylim([0, 1.05])
 plt.tight_layout()
-plt.savefig('figure12_ds_jax_sap_test_on_g1_model_parsing.png',
+plt.savefig('figure12_ds_jax_sap_test_on_g1_model2_parsing.png',
             dpi=300, bbox_inches='tight')
 # plt.show()
 
@@ -326,7 +326,7 @@ def plot_sentence_treelets(net, sent, sent_idx, target):
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    filename = f'ds_jax_sap_test_on_g1_model_S{sent_idx}_{word_seq.replace(" ", "_")}.png'
+    filename = f'ds_jax_sap_test_on_g1_model2_S{sent_idx}_{word_seq.replace(" ", "_")}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     # plt.show()
 

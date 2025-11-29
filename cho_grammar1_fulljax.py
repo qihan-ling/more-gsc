@@ -2,8 +2,8 @@ import matplotlib.pyplot as plt
 import only_gscnet_speedup as gsc
 import numpy as np
 import time
-#t0 = time.time()
-#print(f"Start running at {t0}")
+# t0 = time.time()
+# print(f"Start running at {t0}")
 # ============================================================================
 # Grammar 1 (G1) from Section 4.1
 # ============================================================================
@@ -29,14 +29,14 @@ MAXLEN = 5
 # Initialize network with paper's specifications
 # ============================================================================
 
-#hg = gsc.HarmonicGrammar(pcfg=PCFG_G1, root=ROOT, max_sent_len=MAXLEN)
+hg = gsc.HarmonicGrammar(pcfg=PCFG_G1, root=ROOT, max_sent_len=MAXLEN)
 
 # Display fillers (should have 27 fillers × 15 roles = 405 units)
-#print(f"Filler names: {hg.filler_names}")
-#print(f"Number of fillers: {len(hg.filler_names)}")
+print(f"Filler names: {hg.filler_names}")
+print(f"Number of fillers: {len(hg.filler_names)}")
 
 # Set all filler similarities to 0 (linear independence)
-#sim = hg.get_simlist(dp=0.0)
+sim = hg.get_simlist(dp=0.0)
 
 # Network options matching paper's parameters
 net_opts = {
@@ -49,17 +49,17 @@ net_opts = {
 }
 
 # Initialize network
-#net = gsc.GscNet(hg=hg, encodings={'similarity': sim},
-#                 opts=net_opts, seed=1024)
-#net.generate_corpus(use_freq=True)
+net = gsc.GscNet(hg=hg, encodings={'similarity': sim},
+                 opts=net_opts, seed=1024)
+net.generate_corpus(use_freq=True)
 
 # Display target probabilities
-#print("\n" + "="*70)
-#print("Target sentence probabilities:")
-#for si, sent in enumerate(net.corpus['sentence']):
-#    sent_str = ' '.join([bname.split('/')[0] for bname in sent])
-#    prob = net.corpus['prob_sent'][si]
-#    print(f"Sentence {si}: p = {prob:.4f} ({sent_str})")
+print("\n" + "="*70)
+print("Target sentence probabilities:")
+for si, sent in enumerate(net.corpus['sentence']):
+    sent_str = ' '.join([bname.split('/')[0] for bname in sent])
+    prob = net.corpus['prob_sent'][si]
+    print(f"Sentence {si}: p = {prob:.4f} ({sent_str})")
 
 # ============================================================================
 # Training setup (matching Section 4 parameters)
@@ -76,42 +76,42 @@ train_opts = {
     'average_filler_bias': False,
 }
 
-#net.initialize(train_opts=train_opts)
+net.initialize(train_opts=train_opts)
 
 # ============================================================================
 # Training loop for Figure 11
 # ============================================================================
 
-#print("\n" + "="*70)
-#print("Training Grammar 1...")
-#print("="*70)
+print("\n" + "="*70)
+print("Training Grammar 1...")
+print("="*70)
 
-#n_epochs = 1000  # Train for sufficient epochs to reach convergence
+n_epochs = 1000  # Train for sufficient epochs to reach convergence
 
-#for epoch_block in range(n_epochs // 10):
-#    net.train2(
-#        train_opts={'num_epochs': 10},
-#        savefilename='g1_ds_speedup_model_copy_trainjax.pkl'
-#    )
+for epoch_block in range(n_epochs // 10):
+    net.train2(
+        train_opts={'num_epochs': 10},
+        savefilename='g1_ds_speedup_model_copy_trainjax.pkl'
+    )
 
-#print("\n" + "="*70)
-#print("Training complete!")
+print("\n" + "="*70)
+print("Training complete!")
 
 # Calculate final statistics (last 100 updates)
 # FIXED: Changed 'trace_train' to 'traces_train'
-#final_kl = np.mean(net.traces_train['kl_trees'][-100:])
-#final_kl_sd = np.std(net.traces_train['kl_trees'][-100:])
-#final_acc = np.mean(net.traces_train['acc'][-100:])
-#final_acc_sd = np.std(net.traces_train['acc'][-100:])
+final_kl = np.mean(net.traces_train['kl_trees'][-100:])
+final_kl_sd = np.std(net.traces_train['kl_trees'][-100:])
+final_acc = np.mean(net.traces_train['acc'][-100:])
+final_acc_sd = np.std(net.traces_train['acc'][-100:])
 
-#print(f"Final KL divergence: {final_kl:.3f} (SD = {final_kl_sd:.3f})")
-#print(f"Final production accuracy: {final_acc:.3f} (SD = {final_acc_sd:.3f})")
+print(f"Final KL divergence: {final_kl:.3f} (SD = {final_kl_sd:.3f})")
+print(f"Final production accuracy: {final_acc:.3f} (SD = {final_acc_sd:.3f})")
 
 # Display final learned probabilities
-#print("\nFinal learned probabilities Q(S):")
-#final_probs = np.mean(net.traces_train['prob_sent'][-100:], axis=0)
-#for si, prob in enumerate(final_probs):
-#    print(f"Sentence {si}: Q = {prob:.3f}")
+print("\nFinal learned probabilities Q(S):")
+final_probs = np.mean(net.traces_train['prob_sent'][-100:], axis=0)
+for si, prob in enumerate(final_probs):
+    print(f"Sentence {si}: Q = {prob:.3f}")
 
 # ============================================================================
 # Plot Figure 11 (Training dynamics)
@@ -125,7 +125,8 @@ print("\n" + "="*70)
 print("Generating training plots (Figure 11)...")
 print("Note: plot_train_result() will display 3 separate plots")
 print("="*70)
-gsc.plot_train_result(net,savefilename_prefix='g1_ds_speedup_model_copy_trainjax', legend=True, linewidth=1.5)
+gsc.plot_train_result(
+    net, savefilename_prefix='g1_ds_speedup_model_copy_trainjax', legend=True, linewidth=1.5)
 
 # ============================================================================
 # Parsing tests for Figure 12
@@ -238,6 +239,7 @@ for si, sent in enumerate(net.corpus['sentence']):
     word_seq = get_word_sequence(sent)
     print(f"S{si}: {word_seq}")
 print("="*70)
+
 
 def plot_sentence_treelets(net, sent, sent_idx, target):
     """Run network on specific sentence and plot treelet activations"""

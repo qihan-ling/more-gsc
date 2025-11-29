@@ -3358,23 +3358,60 @@ class GscNet():
                     f"      Total mask0 construction: {time.time() - t_start:.2f}s")
                 print(f"      mask0 has {mask0.nnz:,} non-zero entries")
             else:
-                # Dense path (original code using np.ix_)
+                # Dense path - use vectorized construction (same logic as sparse)
+                print("    Building mask0 using vectorized construction (dense)...")
+                t_start = time.time()
+                mask0 = np.zeros(self.WC.shape)
+
+                # Collect all indices first
+                row_list = []
+                col_list = []
                 mask0 = np.zeros(self.WC.shape)
                 for ri in range(len(self.hg.role_names)):
                     if not self.hg.roles.role_is_terminal[ri]:
                         indices = self.get_role_and_daughter_indices_fast(ri)
                         if indices != None:
-                            idx = indices['self']
-                            idx_l = indices['l']
-                            idx_r = indices['r']
-                            mask0[np.ix_(idx, idx)] = 1.
-                            mask0[np.ix_(idx, idx_l)] = 1.
-                            mask0[np.ix_(idx_l, idx)] = 1.
-                            mask0[np.ix_(idx, idx_r)] = 1.
-                            mask0[np.ix_(idx_r, idx)] = 1.
+                            idx = np.array(indices['self'])
+                            idx_l = np.array(indices['l'])
+                            idx_r = np.array(indices['r'])
+
+                            # idx × idx (self-role)
+                            rows_self, cols_self = np.meshgrid(
+                                idx, idx, indexing='ij')
+                            row_list.append(rows_self.ravel())
+                            col_list.append(cols_self.ravel())
+
+                            # idx × idx_l (parent-left) + symmetric
+                            rows_pl, cols_pl = np.meshgrid(
+                                idx, idx_l, indexing='ij')
+                            row_list.extend([rows_pl.ravel(), cols_pl.ravel()])
+                            col_list.extend([cols_pl.ravel(), rows_pl.ravel()])
+
+                            # idx × idx_r (parent-right) + symmetric
+                            rows_pr, cols_pr = np.meshgrid(
+                                idx, idx_r, indexing='ij')
+                            row_list.extend([rows_pr.ravel(), cols_pr.ravel()])
+                            col_list.extend([cols_pr.ravel(), rows_pr.ravel()])
+
+                            # Sister harmony (if enabled)
                             if self.train_opts['update_sister_harmony']:
-                                mask0[np.ix_(idx_l, idx_r)] = 1.
-                                mask0[np.ix_(idx_r, idx_l)] = 1.
+                                rows_s, cols_s = np.meshgrid(
+                                    idx_l, idx_r, indexing='ij')
+                                row_list.extend(
+                                    [rows_s.ravel(), cols_s.ravel()])
+                                col_list.extend(
+                                    [cols_s.ravel(), rows_s.ravel()])
+
+                # Set all values at once using advanced indexing
+                if row_list:
+                    all_rows = np.concatenate(row_list)
+                    all_cols = np.concatenate(col_list)
+                    mask0[all_rows, all_cols] = 1.0
+
+                print(
+                    f"      mask0 construction: {time.time() - t_start:.2f}s")
+                print(
+                    f"      mask0 non-zero entries: {np.count_nonzero(mask0):,}")
 
         # CRITICAL: Ensure mask0 is in CSR format for fast element access during training
         # CSR format is optimized for element access like mask0[i,j] which happens
@@ -3629,9 +3666,18 @@ class GscNet():
                     else:
                         # FIXED: Avoid np.ix_() for sparse matrices (causes densification)
                         if hasattr(self, 'use_sparse') and self.use_sparse:
-                            for i in idx:
-                                for j in idx:
-                                    maskWC_update[i, j] = 1.
+                            # Create all (i,j) pairs using meshgrid (vectorized)
+                            rows, cols = np.meshgrid(idx, idx, indexing='ij')
+
+                            # Build sparse mask update using COO format (fast!)
+                            mask_update = sparse.coo_matrix(
+                                (np.ones(len(idx)**2, dtype=np.float64),
+                                 (rows.ravel(), cols.ravel())),
+                                shape=maskWC_update.shape
+                            )
+
+                            # Add to existing mask (DOK + COO is efficient)
+                            maskWC_update = maskWC_update + mask_update.todok()
                         else:
                             maskWC_update[np.ix_(idx, idx)] = 1.
             else:
@@ -4340,9 +4386,15 @@ class GscNet():
             dq = jnp.zeros(self.num_roles, dtype=jnp.float32)
         else:
             # For sparse training: accumulate triplets, build COO once at end
-            grad_rows = []
-            grad_cols = []
-            grad_vals = []
+            # Initialize based on whether we're using sparse matrices
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                # For sparse training: accumulate triplets, build COO once at end
+                grad_rows = []
+                grad_cols = []
+                grad_vals = []
+            else:
+                # For dense matrices: initialize gradient array
+                dWC = np.zeros(self.WC.shape)
 
             dbC = np.zeros(self.bC.shape)
             destr = np.zeros(self.estr.shape)
