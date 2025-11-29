@@ -3360,6 +3360,7 @@ class GscNet():
             else:
                 # Dense path - use vectorized construction (same logic as sparse)
                 print("    Building mask0 using vectorized construction (dense)...")
+                import time
                 t_start = time.time()
                 mask0 = np.zeros(self.WC.shape)
 
