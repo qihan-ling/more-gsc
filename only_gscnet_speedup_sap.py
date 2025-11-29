@@ -3503,8 +3503,8 @@ class GscNet():
                         prefix_bnames = []
                     stat_P = self.get_corpus_stat(
                         self.subset_corpus(prefix_bnames))
-                    # TEST: change estimate_prob_inc to estimate_prob_inc_jax
-                    if JAX_AVAILABLE:
+                    # Use JAX only if network is configured for it
+                    if self.use_jax and JAX_AVAILABLE:
                         stat_Q = self.estimate_prob_inc_jax(
                             prefix=prefix, num_trials=self.train_opts['num_trials'])
                         # print(
