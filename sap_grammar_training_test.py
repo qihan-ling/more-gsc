@@ -1,6 +1,9 @@
 import matplotlib.pyplot as plt
 import only_gscnet_speedup_sap as gsc
 import numpy as np
+import time
+
+t0 = time.time()  # Start timing
 #with open('collapsed_filtered_sm5.grammar', 'r') as f:
 #    PCFG_sap = f.read()
 
@@ -34,6 +37,13 @@ print(f"Number of fillers: {len(hg.filler_names)}")
 # Set all filler similarities to 0 (linear independence)
 sim = hg.get_simlist(dp=0.0)
 
+# ============================================================================
+# CONFIGURATION: Toggle these to test different modes
+# ============================================================================
+USE_SPARSE = True      # True = sparse WC matrix, False = dense
+USE_COMPRESSED = True  # True = compressed encodings, False = full dimension
+# ============================================================================
+
 # Network options matching paper's parameters
 net_opts = {
     'use_jax': False,  # Sparse only supported on CPU currently
@@ -44,18 +54,39 @@ net_opts = {
     'm': 30,             # resource constraint (Hq1 strength)
     'use_runC': True,    # use C implementation for speed
     'ep_method': 'integration',
-    'use_sparse_wc': True,
 }
+if USE_SPARSE:
+    net_opts['use_sparse_wc'] = True
 
 encodings = {
     'similarity': sim,
-    'dim_f': 150,  # Compressed encoding
-    'dim_r': 60
 }
+if USE_COMPRESSED:
+    encodings['dim_f'] = 150  # Compressed filler encoding
+    encodings['dim_r'] = 60   # Compressed role encoding
 
 # Initialize network
 net = gsc.GscNet(hg=hg, encodings=encodings,
                  opts=net_opts, seed=1024)
+
+# ============================================================================
+# DIAGNOSTIC: Verify what mode we're running in
+# ============================================================================
+print("\n" + "="*70)
+print("MODE VERIFICATION:")
+print("="*70)
+print(f"  use_sparse: {getattr(net, 'use_sparse', False)}")
+print(f"  WC type: {type(net.WC).__module__}.{type(net.WC).__name__}")
+print(f"  WC shape: {net.WC.shape}")
+if hasattr(net.WC, 'nnz'):
+    print(f"  WC non-zeros: {net.WC.nnz:,} ({100*net.WC.nnz/net.WC.shape[0]/net.WC.shape[1]:.4f}% fill)")
+print(f"  dim_f used: {net.dim_f if hasattr(net, 'dim_f') else 'N/A (full)'}")
+print(f"  dim_r used: {net.dim_r if hasattr(net, 'dim_r') else 'N/A (full)'}")
+print(f"  num_fillers: {net.num_fillers}")
+print(f"  num_roles: {net.num_roles}")
+print(f"  num_bindings: {net.num_bindings}")
+print("="*70 + "\n")
+
 net.generate_corpus(use_freq=True, nsamples=5000)
 
 # Display target probabilities
@@ -98,6 +129,45 @@ else:
     if nnz == 0:
         print("  ❌ PROBLEM: mask0 is all zeros!")
 # ============================================================================
+# DEBUG: Print WC statistics before training
+# ============================================================================
+print("\n" + "="*40)
+print("=== WC Statistics BEFORE Training ===")
+if hasattr(net, 'use_sparse') and net.use_sparse:
+    print(f"  WC type: sparse, nnz={net.WC.nnz}")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {net.WC.diagonal().sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+    # DEBUG: Print first 10 non-zero entries to compare with dense
+    wc_coo = net.WC.tocoo()
+    print(f"  First 10 non-zero entries (row, col, val):")
+    for i in range(min(10, len(wc_coo.data))):
+        print(f"    ({wc_coo.row[i]}, {wc_coo.col[i]}): {wc_coo.data[i]:.6f}")
+else:
+    print(f"  WC type: dense")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {np.diag(net.WC).sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+    # DEBUG: Print first 10 non-zero entries to compare with sparse
+    nonzero = np.nonzero(net.WC)
+    print(f"  First 10 non-zero entries (row, col, val):")
+    for i in range(min(10, len(nonzero[0]))):
+        r, c = nonzero[0][i], nonzero[1][i]
+        print(f"    ({r}, {c}): {net.WC[r, c]:.6f}")
+print("=" * 40)
+
+# DEBUG: Test dynamics computation
+print("\n=== Dynamics Test ===")
+test_actC = np.random.RandomState(42).rand(net.num_bindings)
+if hasattr(net, 'use_sparse') and net.use_sparse:
+    wc_dot_result = net.WC.dot(test_actC)
+else:
+    wc_dot_result = net.WC.dot(test_actC)
+print(f"  WC.dot(test_actC) sum: {wc_dot_result.sum():.10f}")
+print(f"  WC.dot(test_actC) first 5: {wc_dot_result[:5]}")
+print("=" * 40)
+
+# ============================================================================
 # Training loop for Figure 11
 # ============================================================================
 
@@ -120,6 +190,21 @@ for epoch_block in range(n_epochs // 5):
 print("\n" + "="*70)
 print("Training complete!")
 
+# DEBUG: Print WC statistics after training
+print("\n" + "="*40)
+print("=== WC Statistics AFTER Training ===")
+if hasattr(net, 'use_sparse') and net.use_sparse:
+    print(f"  WC type: sparse, nnz={net.WC.nnz}")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {net.WC.diagonal().sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+else:
+    print(f"  WC type: dense")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {np.diag(net.WC).sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+print("=" * 40)
+
 # Calculate final statistics (last 100 updates)
 # FIXED: Changed 'trace_train' to 'traces_train'
 final_kl = np.mean(net.traces_train['kl_trees'][-100:])
@@ -141,6 +226,46 @@ for si, prob in enumerate(final_probs):
 # ============================================================================
 
 net = gsc.load_model('ds_jax_sap_test_on_g1_model2.pkl')
+
+# ============================================================================
+# DEBUG: Analyze WC structure after training
+# ============================================================================
+print("\n" + "="*70)
+print("DEBUG: Analyzing model structure for sparse vs dense comparison")
+print("="*70)
+
+# Check overall WC structure
+gsc.debug_wc_structure(
+    net,
+    # Check PP treelet weights (critical for "N Vi P N")
+    treelet_rules=[
+        ('PP[1]:1', 'P:0', 'N:1'),    # PP -> P N
+        ('VP[1]:1', 'Vi:0', 'PP[1]:1'), # VP -> Vi PP  
+        ('S[2]:0', 'N:0', 'VP[1]:1'),   # S -> N VP
+    ],
+    # Check connectivity of key bindings
+    check_bindings=[
+        'P:0/(1,3)',      # P at position 3
+        'N:1/(1,4)',      # N at position 4
+        'PP[1]:1/(2,3)',  # PP at level 2, position 3
+        'VP[1]:1/(3,2)',  # VP at level 3, position 2
+    ]
+)
+
+# Debug parsing for S1 "N Vi P N" specifically
+print("\n" + "="*70)
+print("DEBUG: Detailed parsing of 'N Vi P N' (S1)")
+print("="*70)
+# Get target bindings for S1
+s1_target = net.corpus['target'][1]  # S1 is index 1
+s1_target_bnames = [net.binding_names[i] for i in np.where(s1_target == 1)[0]]
+print(f"Target bindings for S1: {s1_target_bnames}")
+
+gsc.debug_parse_comparison(
+    net,
+    sent=['N', 'Vi', 'P', 'N'],
+    target_bnames=s1_target_bnames
+)
 
 # FIXED: plot_train_result() doesn't return a figure object and calls plt.show()
 # internally, so we just call it directly

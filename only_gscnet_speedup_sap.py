@@ -94,6 +94,141 @@ def save_model(net, filename):
     f.close()
 
 
+def debug_wc_structure(net, treelet_rules=None, check_bindings=None):
+    """
+    Debug function to analyze WC matrix structure and compare sparse vs dense.
+    
+    Args:
+        net: GscNet object
+        treelet_rules: List of treelet rules to check (e.g., [('PP[1]:1', 'P:0', 'N:1')])
+        check_bindings: List of binding names to check connectivity for
+    """
+    print("\n" + "="*70)
+    print("DEBUG: WC Structure Analysis")
+    print("="*70)
+    
+    is_sparse = hasattr(net, 'use_sparse') and net.use_sparse
+    print(f"  WC type: {'sparse' if is_sparse else 'dense'}")
+    
+    if is_sparse:
+        print(f"  WC nnz: {net.WC.nnz:,}")
+        print(f"  WC sparsity: {100 * (1 - net.WC.nnz / (net.WC.shape[0] * net.WC.shape[1])):.4f}%")
+    else:
+        nnz = np.count_nonzero(net.WC)
+        print(f"  WC nnz: {nnz:,}")
+    
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+    
+    # Check specific treelet connectivity
+    if treelet_rules is not None:
+        print("\n  Checking treelet weights:")
+        for treelet in treelet_rules:
+            if len(treelet) == 3:
+                parent, left, right = treelet
+                # Find binding indices
+                try:
+                    # Get all bindings for these fillers
+                    p_idx = net.find_bindings_fast([b for b in net.binding_names if b.startswith(parent.split(':')[0])])
+                    l_idx = net.find_bindings_fast([b for b in net.binding_names if b.startswith(left.split(':')[0])])
+                    r_idx = net.find_bindings_fast([b for b in net.binding_names if b.startswith(right.split(':')[0])])
+                    
+                    if len(p_idx) > 0 and len(l_idx) > 0:
+                        # Check weights between parent and left daughter
+                        weights_pl = []
+                        for pi in p_idx[:3]:
+                            for li in l_idx[:3]:
+                                if is_sparse:
+                                    w = net.WC[pi, li]
+                                else:
+                                    w = net.WC[pi, li]
+                                if w != 0:
+                                    weights_pl.append((net.binding_names[pi], net.binding_names[li], w))
+                        
+                        if weights_pl:
+                            print(f"    {parent} <-> {left}: Found {len(weights_pl)} non-zero weights")
+                            for p, l, w in weights_pl[:3]:
+                                print(f"      {p} <-> {l}: {w:.4f}")
+                        else:
+                            print(f"    {parent} <-> {left}: NO WEIGHTS FOUND!")
+                except Exception as e:
+                    print(f"    Error checking {treelet}: {e}")
+    
+    # Check specific binding connectivity
+    if check_bindings is not None:
+        print("\n  Checking binding connectivity:")
+        for bname in check_bindings:
+            idx_list = net.find_bindings_fast(bname)
+            if len(idx_list) > 0:
+                idx = idx_list[0]
+                if is_sparse:
+                    row_nnz = net.WC[idx, :].nnz
+                    col_nnz = net.WC[:, idx].nnz
+                    row_sum = net.WC[idx, :].sum()
+                else:
+                    row_nnz = np.count_nonzero(net.WC[idx, :])
+                    col_nnz = np.count_nonzero(net.WC[:, idx])
+                    row_sum = net.WC[idx, :].sum()
+                print(f"    {bname} (idx={idx}): row_nnz={row_nnz}, col_nnz={col_nnz}, row_sum={row_sum:.4f}")
+            else:
+                print(f"    {bname}: NOT FOUND in binding names")
+    
+    # Check mask0 if available
+    if hasattr(net, 'train_opts') and 'mask0' in net.train_opts:
+        mask0 = net.train_opts['mask0']
+        if is_sparse:
+            print(f"\n  mask0 nnz: {mask0.nnz:,}")
+        else:
+            print(f"\n  mask0 nnz: {np.count_nonzero(mask0):,}")
+    
+    print("="*70 + "\n")
+
+
+def debug_parse_comparison(net, sent, target_bnames):
+    """
+    Run parsing with detailed debug output to compare sparse vs dense behavior.
+    
+    Args:
+        net: GscNet object
+        sent: List of word types (e.g., ['N', 'Vi', 'P', 'N'])
+        target_bnames: Expected binding names for correct parse
+    """
+    print("\n" + "="*70)
+    print(f"DEBUG: Parsing '{' '.join(sent)}'")
+    print("="*70)
+    
+    is_sparse = hasattr(net, 'use_sparse') and net.use_sparse
+    print(f"  WC type: {'sparse' if is_sparse else 'dense'}")
+    
+    # Reset to equilibrium
+    net.reset(mu=net.ep, sd=0.01)
+    
+    # Run word by word with debug
+    for wi, word in enumerate(sent):
+        print(f"\n  Word {wi+1}: {word}")
+        net.run_word(word, wi + 1, log_trace=False, debug_dynamics=True)
+    
+    # Run wrapup
+    print("\n  Wrapup:")
+    net.run_wrapup(log_trace=False)
+    
+    # Check final state
+    gp = net.read_grid_point()
+    print(f"\n  Final parse (grid point): {gp[:10]}..." if len(gp) > 10 else f"\n  Final parse: {gp}")
+    
+    # Check if it matches target
+    target_set = set(target_bnames)
+    gp_set = set(gp)
+    if target_set == gp_set:
+        print("  ✓ CORRECT PARSE!")
+    else:
+        print("  ✗ INCORRECT PARSE")
+        print(f"    Missing: {target_set - gp_set}")
+        print(f"    Extra: {gp_set - target_set}")
+    
+    print("="*70 + "\n")
+
+
 def encode_symbols(num_symbols, coord='dist', dp=0., dim=None, seed=None):
     """Generates vector encodings of num_symbols symbols.
 
@@ -1270,7 +1405,7 @@ class GscNet():
         - Efficient dict comprehensions
         - Complexity: O(R + F + B) where R=roles, F=fillers, B=bindings
         '''
-        import time
+
         t0 = time.time()
 
         # Verify Phase 1 is complete
@@ -1898,6 +2033,7 @@ class GscNet():
             if r1 == 'ub' and r2 == 'ub':
                 # for role in roles.role_names:
                 for ri in range(len(self.hg.role_names)):
+                    role = roles.role_names[ri]  # FIX: define 'role' from index
                     # if not roles.is_bracketed(role):
                     if not self.hg.roles.role_is_bracketed[ri]:
                         bname1 = rule['f1'] + bsep + role
@@ -1920,7 +2056,7 @@ class GscNet():
                     for mr in focus_mother_roles:
                         if mr in roles.role_names:
                             bname2 = rule['f2'] + bsep + mr
-                            self.set_weight(b1name, b2name, rule['H'],
+                            self.set_weight(bname1, bname2, rule['H'],  # FIX: was 'b1name'
                                             cumulative=cumulative, c2n=False)
 
             else:
@@ -2468,8 +2604,17 @@ class GscNet():
         if hasattr(self, 'traces'):
             del self.traces
 
-    def get_ep(self, dur=10, plot=True, q=None, actC=None, method='newton'):
-
+    def get_ep(self, dur=None, plot=True, q=None, actC=None, method='newton'):
+        """Find global equilibrium point.
+        
+        Args:
+            dur: Duration for integration method. If None, uses opts['ep_dur'] or default 10.
+                 For large grammars, use smaller values (1.0-2.0) for faster computation.
+        """
+        # SPEED FIX: Allow configurable duration for large grammars
+        if dur is None:
+            dur = self.opts.get('ep_dur', 10)
+        
         q_backup = self.q.copy()
 
         if q is not None:
@@ -2492,6 +2637,7 @@ class GscNet():
             self.opts['q_rate'] = 0.
             self.reset()
             self.set_state(mu=actC, sd=0.)
+            print(f"    Finding equilibrium with integration (dur={dur})...")
             if self.opts['use_runC']:
                 self.runC(dur, log_trace=False)
             else:
@@ -2986,7 +3132,7 @@ class GscNet():
                 fname, wi + 1, update_q_discrete=update_q_discrete, log_trace=log_trace)
             self.store.append({'actC': self.actC, 'q': self.q})
 
-    def run_word(self, fname, wpos, symmetric=True, update_q_discrete=False, log_trace=False):
+    def run_word(self, fname, wpos, symmetric=True, update_q_discrete=False, log_trace=False, debug_dynamics=False):
 
         q_max_backup = self.opts['q_max']
         bname = fname + self.hg.opts['bsep'] + '(1,%d)' % wpos
@@ -2994,6 +3140,24 @@ class GscNet():
         self.opts['q_max'] = self.qpolicy[wpos]
         # print(bname)
         self.set_input(bname)
+        
+        # DEBUG: Track dynamics during word processing
+        if debug_dynamics:
+            print(f"\n  DEBUG run_word({fname}, pos={wpos}):")
+            print(f"    extC sum={self.extC.sum():.4f}, max={self.extC.max():.4f}, nnz={np.count_nonzero(self.extC)}")
+            # Check WC contribution
+            wc_contrib = self.WC.dot(self.actC)
+            if hasattr(self, 'use_sparse') and self.use_sparse:
+                print(f"    WC is sparse, nnz={self.WC.nnz}")
+            else:
+                print(f"    WC is dense, nnz={np.count_nonzero(self.WC)}")
+            print(f"    WC.dot(actC): sum={wc_contrib.sum():.4f}, max={wc_contrib.max():.4f}")
+            # Check which bindings are getting input
+            input_indices = np.where(self.extC > 0)[0]
+            if len(input_indices) > 0:
+                input_bnames = [self.binding_names[i] for i in input_indices[:5]]
+                print(f"    Input bindings: {input_bnames}")
+        
         if self.train_opts['update_scale_constants']:
             self.update_scale_constants(pos=wpos, symmetric=symmetric)
         if update_q_discrete:
@@ -3008,6 +3172,14 @@ class GscNet():
         else:
             self.run(np.max(qinc) / self.opts['q_rate'],
                      log_trace=log_trace, update_q=update_q)
+        
+        # DEBUG: Check state after running
+        if debug_dynamics:
+            # Find top activated bindings
+            top_idx = np.argsort(self.actC)[-5:][::-1]
+            top_bnames = [(self.binding_names[i], self.actC[i]) for i in top_idx]
+            print(f"    After run: top 5 activations: {top_bnames}")
+        
         self.opts['q_max'] = q_max_backup
 
     def run_wrapup(self, update_q_discrete=False, log_trace=False, clear_input=True):
@@ -3266,10 +3438,12 @@ class GscNet():
                 # Set diagonal elements to 1
                 for i in range(min(mask0.shape)):
                     mask0[i, i] = 1
+                print(f"    DEBUG mask0 (update_gram_only=True, sparse): nnz={mask0.nnz}")
             else:
                 mask0 = abs(np.sign(self.WC))
                 # allow the udpate of second-order bias of every binding
                 np.fill_diagonal(mask0, 1)
+                print(f"    DEBUG mask0 (update_gram_only=True, dense): nnz={np.count_nonzero(mask0)}")
         else:
             # rnames_terminal = self.hg.roles.get_terminals()
             # idx_terminal = self.find_roles(rnames_terminal)
@@ -3277,7 +3451,6 @@ class GscNet():
             # CRITICAL FIX: For large grammars, use vectorized COO construction instead of nested loops
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 print("    Building mask0 using vectorized COO construction...")
-                import time
                 # FIXED: Build mask0 in BATCHES to avoid holding 10+ billion entries in memory
                 t_start = time.time()
                 # Process roles in batches, building and accumulating CSR matrices incrementally
@@ -3421,6 +3594,20 @@ class GscNet():
                 print("    Converting mask0 to CSR for fast training access...")
                 mask0 = mask0.tocsr()
 
+        # DEBUG: Check mask0 coverage for specific important bindings (PP-related)
+        debug_bindings = ['PP[1]:1', 'P:0', 'N:1', 'VP[1]:1']
+        print("    DEBUG: Checking mask0 coverage for key bindings:")
+        for db in debug_bindings:
+            matching = [bn for bn in self.binding_names if bn.startswith(db.split(':')[0] + ':')]
+            if matching:
+                idx_list = self.find_bindings_fast(matching[:3])
+                for idx in idx_list[:2]:
+                    if hasattr(self, 'use_sparse') and self.use_sparse:
+                        row_nnz = mask0[idx, :].nnz
+                    else:
+                        row_nnz = np.count_nonzero(mask0[idx, :])
+                    print(f"      {self.binding_names[idx]} (idx={idx}): mask0 row nnz={row_nnz}")
+
         return mask0
 
     def update_train_opts(self, train_opts):
@@ -3462,6 +3649,9 @@ class GscNet():
         for _ in range(self.train_opts['num_epochs']):
 
             self.epoch_num += 1
+            
+            # TIMING DIAGNOSTICS: Track time spent in each phase
+            _timing = {'start': time.time()}
 
             # mask = net.params_backup['WC'].astype(bool).astype(float)
             # mask = np.ones(self.WC.shape)
@@ -3472,9 +3662,11 @@ class GscNet():
                 destr = jnp.zeros(self.estr.shape, dtype=jnp.float32)
                 dqpolicy = jnp.zeros(self.qpolicy.shape, dtype=jnp.float32)
             else:
-                # For sparse WC, use sparse gradient accumulator
+                # EFFICIENCY FIX: For sparse WC, accumulate COO matrices in a list
+                # instead of creating dok_matrix and doing incremental addition
                 if hasattr(self, 'use_sparse') and self.use_sparse:
-                    dWC = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
+                    dWC_list = []  # List of COO matrices to sum at end
+                    dWC = None     # Will be set from first gradient
                 else:
                     dWC = np.zeros(self.WC.shape)
                 dbC = np.zeros(self.bC.shape)
@@ -3496,7 +3688,15 @@ class GscNet():
 
             if self.train_opts['parallel_parser_train']:
                 dWC_parse, acc, dbC_parse = self.train_parallel_parsing()
-                dWC += dWC_parse
+                # EFFICIENCY FIX: Handle sparse gradient accumulation
+                if hasattr(self, 'use_sparse') and self.use_sparse and not self.use_jax:
+                    if sparse.issparse(dWC_parse):
+                        dWC_list.append(dWC_parse.tocoo())
+                    else:
+                        # Convert dense to COO if needed
+                        dWC_list.append(sparse.coo_matrix(dWC_parse))
+                else:
+                    dWC += dWC_parse
                 dbC += dbC_parse
             for pi, prefix in enumerate(prefix_list):
 
@@ -3510,18 +3710,19 @@ class GscNet():
                         prefix_bnames = []
                     stat_P = self.get_corpus_stat(
                         self.subset_corpus(prefix_bnames))
+                    
+                    # TIMING: estimate_prob_inc is the main bottleneck
+                    _t_prob_start = time.time()
+                    
                     # TEST: change estimate_prob_inc to estimate_prob_inc_jax
                     if JAX_AVAILABLE:
                         stat_Q = self.estimate_prob_inc_jax(
                             prefix=prefix, num_trials=self.train_opts['num_trials'])
-                        # print(
-                        #     f"after estimate_prob_inc_jax, stat_Q is of type {type(stat_Q)}")
                     else:
-                        # stat_Q, actC_set = self.estimate_prob_inc(
                         stat_Q = self.estimate_prob_inc(
                             prefix=prefix, num_trials=self.train_opts['num_trials'])
-                        # print(
-                        #     f"after estimate_prob_inc, stat_Q is of type {type(stat_Q)}")
+                    
+                    _timing['estimate_prob'] = _timing.get('estimate_prob', 0) + (time.time() - _t_prob_start)
                     if self.train_opts['ema_stat_weight'] > 0:
                         if hasattr(self, 'stat_Q_prev'):
                             stat_Q_new = self.ema_stat(
@@ -3544,6 +3745,9 @@ class GscNet():
                     kl_curr, xent_curr, err, err_log = self.cost(
                         stat_P, stat_Q_new)
                     self.stat_Q_prev = stat_Q_new  #
+                    # TIMING: cost_grad can be slow with sparse matrices
+                    _t_grad_start = time.time()
+                    
                     if self.train_opts['use_err_avg']:
                         err_avg = {}
                         for key1, _ in err.items():
@@ -3562,8 +3766,16 @@ class GscNet():
                     else:
                         dWC_curr, destr_curr, dq_curr, dbC_curr = self.cost_grad(
                             err, extC_token)
+                    
+                    _timing['cost_grad'] = _timing.get('cost_grad', 0) + (time.time() - _t_grad_start)
 
-                    dWC += dWC_curr * scale_dWC * prefix_weights[pi]
+                    # EFFICIENCY FIX: Accumulate sparse gradients as list of COO matrices
+                    if hasattr(self, 'use_sparse') and self.use_sparse and not self.use_jax:
+                        # Scale and append COO matrix (COO supports scalar multiplication)
+                        scaled_grad = dWC_curr * (scale_dWC * prefix_weights[pi])
+                        dWC_list.append(scaled_grad)
+                    else:
+                        dWC += dWC_curr * scale_dWC * prefix_weights[pi]
                     dbC += dbC_curr * scale_dWC * prefix_weights[pi]
                     if len(prefix) > 0:
                         destr += destr_curr * prefix_weights[pi]
@@ -3628,10 +3840,9 @@ class GscNet():
                         (self.num_bindings, self.num_bindings), dtype=jnp.float32)
                 else:
                     maskbC_update = np.zeros(self.num_bindings)
-                    # Use sparse mask for sparse WC
+                    # EFFICIENCY FIX: Use list to accumulate COO masks instead of DOK
                     if hasattr(self, 'use_sparse') and self.use_sparse:
-                        maskWC_update = sparse.dok_matrix(
-                            (self.num_bindings, self.num_bindings), dtype=np.float64)
+                        mask_coo_list = []  # Accumulate COO matrices
                     else:
                         maskWC_update = np.zeros(
                             (self.num_bindings, self.num_bindings))
@@ -3664,22 +3875,23 @@ class GscNet():
                         maskWC_update = maskWC_update.at[idx_i.flatten(
                         ), idx_j.flatten()].set(1.0)
                     else:
-                        # FIXED: Avoid np.ix_() for sparse matrices (causes densification)
                         if hasattr(self, 'use_sparse') and self.use_sparse:
-                            # Create all (i,j) pairs using meshgrid (vectorized)
+                            # EFFICIENCY FIX: Build COO and append to list
                             rows, cols = np.meshgrid(idx, idx, indexing='ij')
-
-                            # Build sparse mask update using COO format (fast!)
-                            mask_update = sparse.coo_matrix(
+                            mask_coo = sparse.coo_matrix(
                                 (np.ones(len(idx)**2, dtype=np.float64),
                                  (rows.ravel(), cols.ravel())),
-                                shape=maskWC_update.shape
+                                shape=(self.num_bindings, self.num_bindings)
                             )
-
-                            # Add to existing mask (DOK + COO is efficient)
-                            maskWC_update = maskWC_update + mask_update.todok()
+                            mask_coo_list.append(mask_coo)
                         else:
                             maskWC_update[np.ix_(idx, idx)] = 1.
+                # EFFICIENCY FIX: Sum COO masks and convert to CSR at end
+                if not self.use_jax and hasattr(self, 'use_sparse') and self.use_sparse:
+                    if len(mask_coo_list) > 0:
+                        maskWC_update = sum(mask_coo_list).tocsr()
+                    else:
+                        maskWC_update = None
             else:
                 if self.use_jax:
                     maskWC_update = jnp.ones(
@@ -3711,12 +3923,9 @@ class GscNet():
                         self.train_opts['weight_decay_factor'] * \
                         (self.WC - ref)
                 else:
-                    # Use sparse zeros for sparse WC
-                    if hasattr(self, 'use_sparse') and self.use_sparse:
-                        weight_decay = sparse.dok_matrix(
-                            self.WC.shape, dtype=np.float64)
-                    else:
-                        weight_decay = np.zeros(self.WC.shape)
+                    # EFFICIENCY FIX: Use scalar 0 instead of creating sparse zero matrix
+                    # Sparse matrix + scalar works correctly in scipy
+                    weight_decay = 0
 
                 if not (('bias2_only' in self.train_opts) and self.train_opts['bias2_only']):
                     if self.train_opts['optimizer'] == 'adam':
@@ -3745,10 +3954,16 @@ class GscNet():
                             # if self.train_opts['optimizer'] == 'adam':
                             # TODO: Add the weight decay term
 
-                            # CRITICAL FIX: Convert dWC from DOK to CSR before arithmetic
-                            # Mixing DOK and CSR silently produces incorrect results!
+                            # EFFICIENCY FIX: Sum accumulated COO matrices and convert to CSR
                             if hasattr(self, 'use_sparse') and self.use_sparse:
-                                dWC = dWC.tocsr()
+                                if len(dWC_list) > 0:
+                                    # Sum all COO matrices efficiently
+                                    # Stack all COO data and convert to CSR once
+                                    dWC = sum(dWC_list).tocsr()
+                                else:
+                                    # No gradients accumulated
+                                    dWC = sparse.csr_matrix(
+                                        self.WC.shape, dtype=np.float64)
 
                             self.optim['M_WC'] = self.optim['beta1'] * \
                                 self.optim['M_WC'] + \
@@ -3766,28 +3981,61 @@ class GscNet():
                                 (1. - self.optim['beta1']**self.epoch_num)
                             r_k_hat_WC = self.optim['R_WC'] / \
                                 (1. - self.optim['beta2']**self.epoch_num)
-                            # Sparse sqrt - use power(0.5) which is sparse-compatible
+                            # CRITICAL FIX: For sparse matrices, avoid adding eps to every element
+                            # which would densify the matrix. Instead, use element-wise operations
                             if hasattr(self, 'use_sparse') and self.use_sparse:
-                                r_k_hat_WC_sqrt = r_k_hat_WC.power(
-                                    0.5)  # Sparse sqrt via power
+                                # Vectorized sparse Adam update:
+                                # Convert to COO for efficient element access
+                                m_coo = m_k_hat_WC.tocoo()
+                                r_coo = r_k_hat_WC.tocoo()
+                                
+                                if m_coo.nnz > 0:
+                                    # Get r values at the same positions as m (vectorized lookup)
+                                    # Since M and R have the same sparsity pattern from the updates,
+                                    # we can use the COO data directly
+                                    r_sqrt_data = np.sqrt(r_coo.data) + self.optim['eps']
+                                    update_data = self.train_opts['lrate'] * m_coo.data / r_sqrt_data
+                                    
+                                    update = sparse.coo_matrix(
+                                        (update_data, (m_coo.row, m_coo.col)),
+                                        shape=self.WC.shape
+                                    ).tocsr()
+                                    self.WC = self.WC + update
                             else:
                                 r_k_hat_WC_sqrt = np.sqrt(r_k_hat_WC)
-                            self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
-                                (r_k_hat_WC_sqrt + self.optim['eps'])
+                                self.WC += self.train_opts['lrate'] * m_k_hat_WC / \
+                                    (r_k_hat_WC_sqrt + self.optim['eps'])
                         self._set_weights()
                     else:
                         # SGD update - handle sparse mask
 
-                        # CRITICAL FIX: Convert dWC from DOK to CSR before arithmetic
+                        # EFFICIENCY FIX: Sum accumulated COO matrices and convert to CSR
                         if hasattr(self, 'use_sparse') and self.use_sparse:
-                            dWC = dWC.tocsr()
+                            if len(dWC_list) > 0:
+                                dWC = sum(dWC_list).tocsr()
+                            else:
+                                dWC = sparse.csr_matrix(
+                                    self.WC.shape, dtype=np.float64)
                             if not isinstance(weight_decay, (int, float)) and hasattr(weight_decay, 'tocsr'):
                                 weight_decay = weight_decay.tocsr()
 
                         if maskWC_update is None:
                             # No mask (all ones) - apply update directly
+                            # DEBUG: Check if sparse addition is working
+                            if hasattr(self, 'use_sparse') and self.use_sparse and self.epoch_num <= 10:
+                                wc_sum_before = self.WC.sum()
+                                dWC_sum = dWC.sum() if hasattr(dWC, 'sum') else 0
+                                update = self.train_opts['lrate'] * (dWC + weight_decay)
+                                update_sum = update.sum() if hasattr(update, 'sum') else 0
+                                print(f"    DEBUG SPARSE UPDATE: WC_sum_before={wc_sum_before:.4f}, dWC_sum={dWC_sum:.4f}, update_sum={update_sum:.4f}")
+                            
                             self.WC += self.train_opts['lrate'] * \
                                 (dWC + weight_decay)
+                            
+                            # DEBUG: Check WC sum after
+                            if hasattr(self, 'use_sparse') and self.use_sparse and self.epoch_num <= 10:
+                                wc_sum_after = self.WC.sum()
+                                print(f"    DEBUG SPARSE UPDATE: WC_sum_after={wc_sum_after:.4f}, change={wc_sum_after - wc_sum_before:.4f}")
                         else:
                             # Apply mask
                             self.WC += self.train_opts['lrate'] * \
@@ -3888,6 +4136,13 @@ class GscNet():
                     print(' | {:.3f}'.format(acc), end='')
 
                 print(' | {:.3f} {:.3f}'.format(dWC_max, dbC_max))
+                
+                # TIMING DIAGNOSTICS: Print detailed timing info
+                _timing['total'] = time.time() - _timing['start']
+                _t_prob = _timing.get('estimate_prob', 0)
+                _t_grad = _timing.get('cost_grad', 0)
+                _t_other = _timing['total'] - _t_prob - _t_grad
+                print(f"    TIMING: total={_timing['total']:.1f}s | estimate_prob={_t_prob:.1f}s ({100*_t_prob/_timing['total']:.0f}%) | cost_grad={_t_grad:.1f}s ({100*_t_grad/_timing['total']:.0f}%) | other={_t_other:.1f}s")
 
             prob_sent_report_list = np.array(prob_sent_report_list)
 
@@ -4427,6 +4682,11 @@ class GscNet():
                 keys_binding += list(key)
 
             # Process tree gradients
+            # DEBUG: Track gradient statistics for sparse vs dense comparison
+            _debug_tree_grad_count = 0
+            _debug_tree_grad_nonzero = 0
+            _debug_tree_val_sum = 0.0
+            
             if self.train_opts['coef']['trees'] > 0.:
                 for key, val in err['trees'].items():
                     if key in keys_tree:
@@ -4434,6 +4694,8 @@ class GscNet():
                             val = max(val, 0.)
 
                         key_idx = np.array(list(key), dtype=np.int32)
+                        _debug_tree_grad_count += 1
+                        _debug_tree_val_sum += abs(val)
 
                         if self.use_jax:
                             # JAX path (dense)
@@ -4457,12 +4719,23 @@ class GscNet():
                                 # Get non-zero positions
                                 sub_rows, sub_cols = key_submatrix.nonzero()
 
+                                # DEBUG: Check if submatrix is empty
+                                if len(sub_rows) == 0 and self.epoch_num <= 3:
+                                    print(f"    DEBUG SPARSE GRAD: Tree key has {len(key_idx)} bindings but mask0 submatrix is EMPTY!")
+                                    print(f"      key_idx: {key_idx[:5]}... (showing first 5)")
+                                    # Check if any of these indices are in mask0
+                                    for idx in key_idx[:3]:
+                                        row_nnz = mask0_csr[idx, :].nnz
+                                        col_nnz = mask0_csr[:, idx].nnz
+                                        print(f"      idx {idx}: row_nnz={row_nnz}, col_nnz={col_nnz}")
+                                
                                 # Convert to full matrix indices
                                 valid_rows = key_idx[sub_rows]
                                 valid_cols = key_idx[sub_cols]
 
                                 # Accumulate triplets (fast list extend)
                                 n_valid = len(valid_rows)
+                                _debug_tree_grad_nonzero += n_valid
                                 grad_rows.extend(valid_rows.tolist())
                                 grad_cols.extend(valid_cols.tolist())
                                 grad_vals.extend([coef_val] * n_valid)
@@ -4470,8 +4743,10 @@ class GscNet():
                                 # Dense path (fallback)
                                 state = np.zeros(self.num_bindings)
                                 state[key_idx] = 1.
-                                dWC += np.outer(state, state) * \
-                                    self.train_opts['mask0'] * val * \
+                                outer_prod = np.outer(state, state)
+                                masked = outer_prod * self.train_opts['mask0']
+                                _debug_tree_grad_nonzero += np.count_nonzero(masked)
+                                dWC += masked * val * \
                                     self.train_opts['coef']['trees']
 
                         # Update estr if needed
@@ -4489,6 +4764,10 @@ class GscNet():
                             else:
                                 destr[idx_tb] += extC_token[idx_tb] * val * \
                                     self.train_opts['coef']['trees']
+            
+            # DEBUG: Print gradient statistics for first few epochs
+            if self.epoch_num <= 3 and _debug_tree_grad_count > 0:
+                print(f"    DEBUG TREE GRAD: {_debug_tree_grad_count} trees, {_debug_tree_grad_nonzero} nonzero grad entries, val_sum={_debug_tree_val_sum:.4f}")
 
             # Process treelet gradients
             if self.train_opts['coef']['treelets'] > 0.:
