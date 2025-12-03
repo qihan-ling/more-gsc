@@ -101,6 +101,12 @@ for si, sent in enumerate(net.corpus['sentence'][:10]):
 # Training setup (matching Section 4 parameters)
 # ============================================================================
 
+# FIX: Set random seed before training to ensure reproducibility
+# This ensures sparse and dense runs use the same random tree selection
+import numpy as np
+np.random.seed(42)  # Use fixed seed for reproducibility
+print("Random seed set to 42 for training reproducibility")
+
 train_opts = {
     # double the learning rate because trial size increases from 4 to 500
     'lrate': 0.1,

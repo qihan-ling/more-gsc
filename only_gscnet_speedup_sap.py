@@ -3748,6 +3748,13 @@ class GscNet():
                     # TIMING: cost_grad can be slow with sparse matrices
                     _t_grad_start = time.time()
                     
+                    # DEBUG: Check error values before computing gradient
+                    if self.epoch_num <= 3 and hasattr(self, 'use_sparse') and self.use_sparse:
+                        num_tree_errs = len(err['trees']) if 'trees' in err else 0
+                        tree_err_sum = sum(abs(v) for v in err['trees'].values()) if 'trees' in err else 0
+                        num_treelet_errs = len(err['treelets']) if 'treelets' in err else 0
+                        print(f"    DEBUG ERR: {num_tree_errs} trees (sum={tree_err_sum:.6f}), {num_treelet_errs} treelets")
+                    
                     if self.train_opts['use_err_avg']:
                         err_avg = {}
                         for key1, _ in err.items():
@@ -4022,20 +4029,29 @@ class GscNet():
                         if maskWC_update is None:
                             # No mask (all ones) - apply update directly
                             # DEBUG: Check if sparse addition is working
-                            if hasattr(self, 'use_sparse') and self.use_sparse and self.epoch_num <= 10:
+                            # Print at epochs: 1-10, then every 100 epochs
+                            should_debug = hasattr(self, 'use_sparse') and self.use_sparse and (
+                                self.epoch_num <= 10 or self.epoch_num % 100 == 0)
+                            
+                            if should_debug:
                                 wc_sum_before = self.WC.sum()
+                                wc_nnz_before = self.WC.nnz
                                 dWC_sum = dWC.sum() if hasattr(dWC, 'sum') else 0
+                                dWC_nnz = dWC.nnz if hasattr(dWC, 'nnz') else np.count_nonzero(dWC)
                                 update = self.train_opts['lrate'] * (dWC + weight_decay)
                                 update_sum = update.sum() if hasattr(update, 'sum') else 0
-                                print(f"    DEBUG SPARSE UPDATE: WC_sum_before={wc_sum_before:.4f}, dWC_sum={dWC_sum:.4f}, update_sum={update_sum:.4f}")
+                                print(f"    [Epoch {self.epoch_num}] DEBUG SPARSE UPDATE:")
+                                print(f"      dWC: sum={dWC_sum:.6f}, nnz={dWC_nnz}")
+                                print(f"      WC before: sum={wc_sum_before:.4f}, nnz={wc_nnz_before}")
                             
                             self.WC += self.train_opts['lrate'] * \
                                 (dWC + weight_decay)
                             
                             # DEBUG: Check WC sum after
-                            if hasattr(self, 'use_sparse') and self.use_sparse and self.epoch_num <= 10:
+                            if should_debug:
                                 wc_sum_after = self.WC.sum()
-                                print(f"    DEBUG SPARSE UPDATE: WC_sum_after={wc_sum_after:.4f}, change={wc_sum_after - wc_sum_before:.4f}")
+                                wc_nnz_after = self.WC.nnz
+                                print(f"      WC after: sum={wc_sum_after:.4f}, nnz={wc_nnz_after}, change={wc_sum_after - wc_sum_before:.6f}")
                         else:
                             # Apply mask
                             self.WC += self.train_opts['lrate'] * \
@@ -4681,11 +4697,25 @@ class GscNet():
             for key in keys_treelet:
                 keys_binding += list(key)
 
+            # DEBUG: Check keys selection
+            if self.epoch_num <= 3 and hasattr(self, 'use_sparse') and self.use_sparse:
+                print(f"    DEBUG KEYS: {len(keys_tree)} tree keys selected, {len(keys_treelet)} treelet keys")
+                if len(err['trees']) > 0:
+                    sample_key = list(err['trees'].keys())[0]
+                    print(f"      Sample tree key: {sample_key[:5]}... (len={len(sample_key)})")
+                    sample_val = list(err['trees'].values())[0]
+                    print(f"      Sample tree val: {sample_val:.6f}")
+
             # Process tree gradients
             # DEBUG: Track gradient statistics for sparse vs dense comparison
             _debug_tree_grad_count = 0
             _debug_tree_grad_nonzero = 0
             _debug_tree_val_sum = 0.0
+            
+            # FIX: For sparse, use dictionary to aggregate gradients by position
+            # This ensures same behavior as dense += which accumulates incrementally
+            if hasattr(self, 'use_sparse') and self.use_sparse and not self.use_jax:
+                grad_dict = {}  # (row, col) -> accumulated value
             
             if self.train_opts['coef']['trees'] > 0.:
                 for key, val in err['trees'].items():
@@ -4733,12 +4763,16 @@ class GscNet():
                                 valid_rows = key_idx[sub_rows]
                                 valid_cols = key_idx[sub_cols]
 
-                                # Accumulate triplets (fast list extend)
+                                # FIX: Accumulate into dictionary to properly handle 
+                                # duplicate positions (same as dense += behavior)
                                 n_valid = len(valid_rows)
                                 _debug_tree_grad_nonzero += n_valid
-                                grad_rows.extend(valid_rows.tolist())
-                                grad_cols.extend(valid_cols.tolist())
-                                grad_vals.extend([coef_val] * n_valid)
+                                for r, c in zip(valid_rows, valid_cols):
+                                    pos = (r, c)
+                                    if pos in grad_dict:
+                                        grad_dict[pos] += coef_val
+                                    else:
+                                        grad_dict[pos] = coef_val
                             else:
                                 # Dense path (fallback)
                                 state = np.zeros(self.num_bindings)
@@ -4768,6 +4802,33 @@ class GscNet():
             # DEBUG: Print gradient statistics for first few epochs
             if self.epoch_num <= 3 and _debug_tree_grad_count > 0:
                 print(f"    DEBUG TREE GRAD: {_debug_tree_grad_count} trees, {_debug_tree_grad_nonzero} nonzero grad entries, val_sum={_debug_tree_val_sum:.4f}")
+                # DEBUG: For dense, also print gradient sum to compare with sparse
+                if not self.use_jax and not (hasattr(self, 'use_sparse') and self.use_sparse):
+                    dense_grad_sum = dWC.sum()
+                    dense_grad_nnz = np.count_nonzero(dWC)
+                    print(f"    DEBUG DENSE GRAD: nnz={dense_grad_nnz}, sum={dense_grad_sum:.6f}")
+                    
+                    # DEBUG: Check specific key positions (VP[1]:1 <-> *Vi:0)
+                    key_positions = []
+                    for bname, bidx in self.binding_name_to_idx.items():
+                        if 'VP[1]:1' in bname or '*Vi:0' in bname:
+                            key_positions.append((bname, bidx))
+                    
+                    if key_positions:
+                        vp_indices = [idx for name, idx in key_positions if 'VP[1]:1' in name]
+                        vi_star_indices = [idx for name, idx in key_positions if '*Vi:0' in name]
+                        
+                        # Check if any VP-*Vi connections have gradient
+                        vp_vi_grads = []
+                        for vp_idx in vp_indices[:3]:
+                            for vi_idx in vi_star_indices[:3]:
+                                if abs(dWC[vp_idx, vi_idx]) > 1e-10:
+                                    vp_vi_grads.append(((vp_idx, vi_idx), dWC[vp_idx, vi_idx]))
+                        
+                        if vp_vi_grads:
+                            print(f"    DEBUG: VP-*Vi gradient entries: {vp_vi_grads[:3]}")
+                        else:
+                            print(f"    DEBUG: NO VP[1]:1 <-> *Vi:0 gradient entries found (dense)!")
 
             # Process treelet gradients
             if self.train_opts['coef']['treelets'] > 0.:
@@ -4784,12 +4845,13 @@ class GscNet():
                                 dWC = dWC.at[key[2], key[0]].add(coef_val)
                             else:
                                 if hasattr(self, 'use_sparse') and self.use_sparse:
-                                    # Accumulate triplets
-                                    grad_rows.extend(
-                                        [key[0], key[1], key[0], key[2]])
-                                    grad_cols.extend(
-                                        [key[1], key[0], key[2], key[0]])
-                                    grad_vals.extend([coef_val] * 4)
+                                    # FIX: Use dictionary to accumulate
+                                    for pos in [(key[0], key[1]), (key[1], key[0]), 
+                                                (key[0], key[2]), (key[2], key[0])]:
+                                        if pos in grad_dict:
+                                            grad_dict[pos] += coef_val
+                                        else:
+                                            grad_dict[pos] = coef_val
                                 else:
                                     dWC[key[0], key[1]] += coef_val
                                     dWC[key[1], key[0]] += coef_val
@@ -4801,9 +4863,12 @@ class GscNet():
                             dWC = dWC.at[key[0], key[0]].add(coef_val)
                         else:
                             if hasattr(self, 'use_sparse') and self.use_sparse:
-                                grad_rows.append(key[0])
-                                grad_cols.append(key[0])
-                                grad_vals.append(coef_val)
+                                # FIX: Use dictionary to accumulate
+                                pos = (key[0], key[0])
+                                if pos in grad_dict:
+                                    grad_dict[pos] += coef_val
+                                else:
+                                    grad_dict[pos] = coef_val
                             else:
                                 dWC[key[0], key[0]] += coef_val
 
@@ -4827,9 +4892,12 @@ class GscNet():
                                 dWC = dWC.at[key, key].add(coef_val)
                             else:
                                 if hasattr(self, 'use_sparse') and self.use_sparse:
-                                    grad_rows.append(key)
-                                    grad_cols.append(key)
-                                    grad_vals.append(coef_val)
+                                    # FIX: Use dictionary to accumulate
+                                    pos = (key, key)
+                                    if pos in grad_dict:
+                                        grad_dict[pos] += coef_val
+                                    else:
+                                        grad_dict[pos] = coef_val
                                 else:
                                     dWC[key, key] += coef_val
 
@@ -4853,10 +4921,12 @@ class GscNet():
                         dbC = dbC.at[key[1]].add(coef_val)
                     else:
                         if hasattr(self, 'use_sparse') and self.use_sparse:
-                            # Accumulate triplets
-                            grad_rows.extend([key[0], key[1]])
-                            grad_cols.extend([key[1], key[0]])
-                            grad_vals.extend([coef_val, coef_val])
+                            # FIX: Use dictionary to accumulate
+                            for pos in [(key[0], key[1]), (key[1], key[0])]:
+                                if pos in grad_dict:
+                                    grad_dict[pos] += coef_val
+                                else:
+                                    grad_dict[pos] = coef_val
                         else:
                             dWC[key[0], key[1]] += coef_val
                             dWC[key[1], key[0]] += coef_val
@@ -4874,10 +4944,12 @@ class GscNet():
                         dbC = dbC.at[key].add(coef_val)
                     else:
                         if hasattr(self, 'use_sparse') and self.use_sparse:
-                            # Accumulate triplets
-                            grad_rows.append(key)
-                            grad_cols.append(key)
-                            grad_vals.append(coef_val)
+                            # FIX: Use dictionary to accumulate
+                            pos = (key, key)
+                            if pos in grad_dict:
+                                grad_dict[pos] += coef_val
+                            else:
+                                grad_dict[pos] = coef_val
                         else:
                             dWC[key, key] += coef_val
 
@@ -4890,9 +4962,50 @@ class GscNet():
                         else:
                             destr[key] += extC_token[key] * coef_val
 
-        # Build sparse WC gradient from accumulated triplets (ONCE!)
+        # Build sparse WC gradient from accumulated dictionary (ONCE!)
+        # FIX: Using dictionary ensures proper aggregation of duplicate entries
+        # (same behavior as dense += which accumulates incrementally)
         if not self.use_jax and hasattr(self, 'use_sparse') and self.use_sparse:
-            if len(grad_vals) > 0:
+            # DEBUG: Check dictionary accumulation before building matrix
+            if self.epoch_num <= 3:
+                total_sum = sum(grad_dict.values()) if grad_dict else 0
+                nonzero_count = len([v for v in grad_dict.values() if abs(v) > 1e-10])
+                print(f"    DEBUG GRAD_DICT: {len(grad_dict)} unique positions, {nonzero_count} nonzero values, sum={total_sum:.6f}")
+                
+                # DEBUG: Check specific key positions (VP[1]:1 <-> *Vi:0)
+                # These are the positions critical for S1 "N Vi P N" parsing
+                key_positions = []
+                for bname, bidx in self.binding_name_to_idx.items():
+                    if 'VP[1]:1' in bname or '*Vi:0' in bname:
+                        key_positions.append((bname, bidx))
+                
+                if key_positions:
+                    vp_indices = [idx for name, idx in key_positions if 'VP[1]:1' in name]
+                    vi_star_indices = [idx for name, idx in key_positions if '*Vi:0' in name]
+                    
+                    # Check if any VP-*Vi connections are in the gradient
+                    vp_vi_grads = []
+                    for vp_idx in vp_indices[:3]:  # Check first 3 VP bindings
+                        for vi_idx in vi_star_indices[:3]:  # Check first 3 *Vi bindings
+                            pos = (vp_idx, vi_idx)
+                            if pos in grad_dict:
+                                vp_vi_grads.append((pos, grad_dict[pos]))
+                    
+                    if vp_vi_grads:
+                        print(f"    DEBUG: VP-*Vi gradient entries: {vp_vi_grads[:3]}")
+                    else:
+                        print(f"    DEBUG: NO VP[1]:1 <-> *Vi:0 gradient entries found!")
+            
+            if len(grad_dict) > 0:
+                # Convert dictionary to COO format (no duplicates now!)
+                grad_rows = []
+                grad_cols = []
+                grad_vals = []
+                for (r, c), v in grad_dict.items():
+                    grad_rows.append(r)
+                    grad_cols.append(c)
+                    grad_vals.append(v)
+                
                 dWC = sparse.coo_matrix(
                     (grad_vals, (grad_rows, grad_cols)),
                     shape=(self.num_bindings, self.num_bindings),
