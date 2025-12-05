@@ -246,9 +246,12 @@ gsc.debug_wc_structure(
     net,
     # Check PP treelet weights (critical for "N Vi P N")
     treelet_rules=[
-        ('PP[1]:1', 'P:0', 'N:1'),    # PP -> P N
-        ('VP[1]:1', 'Vi:0', 'PP[1]:1'), # VP -> Vi PP  
-        ('S[2]:0', 'N:0', 'VP[1]:1'),   # S -> N VP
+        ('PP[1]:1', 'P:0', 'N:1'),       # PP -> P N
+        ('VP[1]:1', '*Vi:0', 'PP[1]:1'), # VP -> *Vi PP (COPY of Vi)
+        ('S[2]:0', '*N:0', 'VP[1]:1'),   # S -> *N VP (COPY of N)
+        # Also check copy rules
+        ('*Vi:0', 'Vi:0', None),         # *Vi copies Vi
+        ('*N:0', 'N:0', None),           # *N copies N
     ],
     # Check connectivity of key bindings
     check_bindings=[
