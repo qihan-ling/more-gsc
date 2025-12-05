@@ -3642,22 +3642,15 @@ class GscNet():
         for prefix in prefix_list:
             maxlen_prefix = max(maxlen_prefix, len(prefix))
 
-        # DIAGNOSTIC: Print random state BEFORE reset to prove divergence
-        state_before = np.random.get_state()
-        # The state tuple is (name, array_624_values, position, has_gauss, cached_gauss)
-        # Position tells us how many values have been consumed from the Mersenne Twister
-        state_pos = state_before[2]
-        # Generate 5 "probe" numbers WITHOUT consuming state (save/restore)
-        probe_nums = [np.random.random() for _ in range(5)]
-        np.random.set_state(state_before)  # Restore state
-        print(f"RANDOM STATE BEFORE TRAINING: position={state_pos}, probe=[{', '.join(f'{x:.6f}' for x in probe_nums)}]")
-        
-        # FIX: Reset random seed RIGHT BEFORE training to ensure sparse/dense have identical random state
-        # The initialization phase (get_ep, etc.) may consume different random numbers for sparse vs dense
-        # due to subtle differences in convergence timing. Resetting here ensures training is reproducible.
-        training_seed = 12345  # Fixed seed for training phase
-        np.random.seed(training_seed)
-        print(f"TRAINING SEED RESET: np.random.seed({training_seed}) for reproducible training")
+        # NOTE: Random seed should be set ONCE before training starts (in the training script),
+        # not here in train2() which may be called multiple times in a loop.
+        # Diagnostic: Print random state at start of each train2() call
+        if self.epoch_num == 0:  # Only print on first call
+            state_before = np.random.get_state()
+            state_pos = state_before[2]
+            probe_nums = [np.random.random() for _ in range(5)]
+            np.random.set_state(state_before)  # Restore state
+            print(f"RANDOM STATE AT FIRST train2() CALL: position={state_pos}")
         
         # DIAGNOSTIC: Print initial parameter checksums to verify sparse/dense start identically
         bc_checksum = self.bC.sum()
@@ -4343,6 +4336,12 @@ class GscNet():
             stat: Corpus statistics (same format as original)
             actC_list: Array of activation states (num_trials, num_bindings)
         """
+        # CRITICAL FIX: Generate rng_seed BEFORE any early returns to ensure
+        # sparse and dense paths consume the same random numbers.
+        # This prevents random state divergence between sparse and dense models.
+        if rng_seed is None:
+            rng_seed = np.random.randint(0, 1000000)
+        
         if not JAX_AVAILABLE:
             print("JAX not available, falling back to CPU version")
             return self.estimate_prob_inc(prefix, num_trials, progress, update_q_discrete)
@@ -4363,9 +4362,7 @@ class GscNet():
         # Extract network parameters for JAX
         net_params = _extract_net_params_for_jax(self)
 
-        # Generate random keys for each trial
-        if rng_seed is None:
-            rng_seed = np.random.randint(0, 1000000)
+        # Generate random keys for each trial (rng_seed already generated above)
         rng = jax.random.PRNGKey(rng_seed)
         rng_keys = jax.random.split(rng, num_trials)
 
@@ -4740,55 +4737,27 @@ class GscNet():
                                 self.train_opts['coef']['trees']
                         else:
                             # OPTIMIZED: Submatrix extraction for sparse
-                            # if hasattr(self, 'use_sparse') and self.use_sparse:
-                            #     coef_val = val * \
-                            #         self.train_opts['coef']['trees']
-                            #     mask0_csr = self.train_opts['mask0']
-
-                            #     # Extract submatrix (np.ix_() works correctly with scipy sparse)
-                            #     key_submatrix = mask0_csr[np.ix_(key_idx, key_idx)]
-
-                            #     # Get non-zero positions
-                            #     sub_rows, sub_cols = key_submatrix.nonzero()
-                                
-                            #     # Convert to full matrix indices
-                            #     valid_rows = key_idx[sub_rows]
-                            #     valid_cols = key_idx[sub_cols]
-
-                            #     # DIAGNOSTIC: Track statistics
-                            #     _diag_tree_count += 1
-                            #     _diag_pos_count += len(valid_rows)
-                            #     _diag_val_sum += coef_val * len(valid_rows)
-
-                            #     # FIX: Accumulate into dictionary to properly handle 
-                            #     # duplicate positions (same as dense += behavior)
-                            #     for r, c in zip(valid_rows, valid_cols):
-                            #         pos = (r, c)
-                            #         if pos in grad_dict:
-                            #             grad_dict[pos] += coef_val
-                            #         else:
-                            #             grad_dict[pos] = coef_val
                             if hasattr(self, 'use_sparse') and self.use_sparse:
                                 coef_val = val * self.train_opts['coef']['trees']
                                 mask0_csr = self.train_opts['mask0']
+
+                                # Extract submatrix (np.ix_() works correctly with scipy sparse)
+                                key_submatrix = mask0_csr[np.ix_(key_idx, key_idx)]
+
+                                # Get non-zero positions
+                                sub_rows, sub_cols = key_submatrix.nonzero()
                                 
-                                key_idx_arr = np.array(list(key), dtype=np.int32)
-                                n_keys = len(key_idx_arr)
-                                
-                                # Create all pairs using meshgrid
-                                row_mesh, col_mesh = np.meshgrid(key_idx_arr, key_idx_arr, indexing='ij')
-                                all_rows = row_mesh.ravel()
-                                all_cols = col_mesh.ravel()
-                                
-                                # Vectorized mask lookup (MUCH faster than submatrix extraction)
-                                mask_values = np.asarray(mask0_csr[all_rows, all_cols]).ravel()
-                                
-                                # Filter to non-zero positions
-                                valid_mask = mask_values != 0
-                                valid_rows = all_rows[valid_mask]
-                                valid_cols = all_cols[valid_mask]
-                                
-                                # Accumulate gradients
+                                # Convert to full matrix indices
+                                valid_rows = key_idx[sub_rows]
+                                valid_cols = key_idx[sub_cols]
+
+                                # DIAGNOSTIC: Track statistics
+                                _diag_tree_count += 1
+                                _diag_pos_count += len(valid_rows)
+                                _diag_val_sum += coef_val * len(valid_rows)
+
+                                # FIX: Accumulate into dictionary to properly handle 
+                                # duplicate positions (same as dense += behavior)
                                 for r, c in zip(valid_rows, valid_cols):
                                     pos = (r, c)
                                     if pos in grad_dict:

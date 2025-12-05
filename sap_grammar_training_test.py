@@ -184,6 +184,11 @@ print("="*70)
 # Train for sufficient epochs to reach convergence
 n_epochs = 1000
 
+# NOTE: No seed reset before training - use natural random state from seed 41
+# The random state consumption bug in estimate_prob_inc_jax has been fixed,
+# so sparse and dense will now follow identical trajectories without a reset.
+# This restores Round 8's better-performing training trajectory.
+
 #exec(open('debug_training_update.py').read())
 #exec(open('debug_weight_update.py').read())
 #exec(open('debug_across_10epoch_update.py').read())
