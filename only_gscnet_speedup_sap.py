@@ -3433,7 +3433,7 @@ class GscNet():
 
     def get_mask0(self):
 
-        if self.train_opts['update_gram_only']:
+        if self.train_opts['update_gram_only']: # default False
             # mask0 = abs(np.sign(self.WC))
             # # allow the udpate of second-order bias of every binding
             # np.fill_diagonal(mask0, 1)
@@ -3456,9 +3456,6 @@ class GscNet():
                 # allow the udpate of second-order bias of every binding
                 np.fill_diagonal(mask0, 1)
         else:
-            # rnames_terminal = self.hg.roles.get_terminals()
-            # idx_terminal = self.find_roles(rnames_terminal)
-            # Use sparse zeros for sparse WC
             # CRITICAL FIX: For large grammars, use vectorized COO construction instead of nested loops
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # FIXED: Build mask0 in BATCHES to avoid holding 10+ billion entries in memory
@@ -3467,13 +3464,11 @@ class GscNet():
                 mask0 = sparse.csr_matrix(self.WC.shape, dtype=np.float64)
 
                 batch_size = 10  # Process 10 roles at a time
-                non_terminal_roles = [ri for ri in range(len(self.hg.role_names))
-                                      if not self.hg.roles.role_is_terminal[ri]]
-                total_roles = len(non_terminal_roles)
-
+                total_roles = len(self.hg.role_names)
+                # ====== MERGED: Process all roles in batches for both diagonal (self-attention) and parent-daughter relations======
+                print("      Processing all roles in batches...")
                 for batch_start in range(0, total_roles, batch_size):
                     batch_end = min(batch_start + batch_size, total_roles)
-                    role_indices = non_terminal_roles[batch_start:batch_end]
 
                     if batch_start % 50 == 0:
                         print(
@@ -3483,38 +3478,40 @@ class GscNet():
                     row_list = []
                     col_list = []
 
-                    for ri in role_indices:
-                        indices = self.get_role_and_daughter_indices_fast(ri)
-                        if indices != None:
-                            idx = np.array(indices['self'])
-                            idx_l = np.array(indices['l'])
-                            idx_r = np.array(indices['r'])
+                    for ri in range(batch_start, batch_end):
+                        # Add diagonal self-connections for ALL roles (terminal + non-terminal)
+                        idx = self.role_to_binding_indices[ri]
+                        if len(idx) > 0:
+                            idx_array = np.array(idx)
+                            # Diagonal entries only (much more efficient than meshgrid)
+                            row_list.append(idx_array)
+                            col_list.append(idx_array)
+                        if not self.hg.roles.role_is_terminal[ri]:
+                            indices = self.get_role_and_daughter_indices_fast(ri)
+                            if indices != None:
+                                idx = np.array(indices['self'])
+                                idx_l = np.array(indices['l'])
+                                idx_r = np.array(indices['r'])
 
-                            # idx × idx (self-role)
-                            rows_self, cols_self = np.meshgrid(
-                                idx, idx, indexing='ij')
-                            row_list.append(rows_self.ravel())
-                            col_list.append(cols_self.ravel())
+                                # idx × idx_l (parent-left) + symmetric
+                                rows_pl, cols_pl = np.meshgrid(
+                                    idx, idx_l, indexing='ij')
+                                row_list.extend([rows_pl.ravel(), cols_pl.ravel()])
+                                col_list.extend([cols_pl.ravel(), rows_pl.ravel()])
 
-                            # idx × idx_l (parent-left) + symmetric
-                            rows_pl, cols_pl = np.meshgrid(
-                                idx, idx_l, indexing='ij')
-                            row_list.extend([rows_pl.ravel(), cols_pl.ravel()])
-                            col_list.extend([cols_pl.ravel(), rows_pl.ravel()])
+                                # idx × idx_r (parent-right) + symmetric
+                                rows_pr, cols_pr = np.meshgrid(
+                                    idx, idx_r, indexing='ij')
+                                row_list.extend([rows_pr.ravel(), cols_pr.ravel()])
+                                col_list.extend([cols_pr.ravel(), rows_pr.ravel()])
 
-                            # idx × idx_r (parent-right) + symmetric
-                            rows_pr, cols_pr = np.meshgrid(
-                                idx, idx_r, indexing='ij')
-                            row_list.extend([rows_pr.ravel(), cols_pr.ravel()])
-                            col_list.extend([cols_pr.ravel(), rows_pr.ravel()])
-
-                            # Sister harmony (if enabled)
-                            if self.train_opts['update_sister_harmony']:
-                                rows_s, cols_s = np.meshgrid(
-                                    idx_l, idx_r, indexing='ij')
-                                row_list.extend(
-                                    [rows_s.ravel(), cols_s.ravel()])
-                                col_list.extend(
+                                # Sister harmony (if enabled)
+                                if self.train_opts['update_sister_harmony']:
+                                    rows_s, cols_s = np.meshgrid(
+                                        idx_l, idx_r, indexing='ij')
+                                    row_list.extend(
+                                        [rows_s.ravel(), cols_s.ravel()])
+                                    col_list.extend(
                                     [cols_s.ravel(), rows_s.ravel()])
 
                     # Build COO for this batch and add to mask0
@@ -3549,20 +3546,19 @@ class GscNet():
                 # Collect all indices first
                 row_list = []
                 col_list = []
-                mask0 = np.zeros(self.WC.shape)
                 for ri in range(len(self.hg.role_names)):
+                    # Add diagonal self-connections for ALL roles
+                    idx = self.role_to_binding_indices[ri]
+                    if len(idx) > 0:
+                        idx_array = np.array(idx)
+                        row_list.append(idx_array)
+                        col_list.append(idx_array)
                     if not self.hg.roles.role_is_terminal[ri]:
                         indices = self.get_role_and_daughter_indices_fast(ri)
                         if indices != None:
                             idx = np.array(indices['self'])
                             idx_l = np.array(indices['l'])
                             idx_r = np.array(indices['r'])
-
-                            # idx × idx (self-role)
-                            rows_self, cols_self = np.meshgrid(
-                                idx, idx, indexing='ij')
-                            row_list.append(rows_self.ravel())
-                            col_list.append(cols_self.ravel())
 
                             # idx × idx_l (parent-left) + symmetric
                             rows_pl, cols_pl = np.meshgrid(
