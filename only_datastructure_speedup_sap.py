@@ -98,7 +98,7 @@ class PCFG():
         # lookup will still be very sloe for 10K grammar
         # print("DEBUG3")
         # self._create_fast_lookups_pcfg()
-        self._create_fastER_lookups_pcfg()
+        #self._create_fastER_lookups_pcfg()
 
     def _set_opts(self):
         # the default setting
@@ -528,7 +528,16 @@ class PCFG():
                 fname != null_symbol and
                 filler_types[fname] not in root_types)
         }
-
+        # orig_terminal_set = {fname for fname in self.filler_names if self.is_terminal(fname)}
+        # if orig_terminal_set != terminal_set:
+        #     print(f"orig_terminal_set: {orig_terminal_set}")
+        #     print(f"terminal_set: {terminal_set}")
+        #     print(f"Are they the same? {orig_terminal_set == terminal_set}")
+        #     print(f"Are they identical object? {orig_terminal_set is terminal_set}")
+        #     print(f"orig_terminal_set length: {len(orig_terminal_set)}")
+        #     print(f"terminal_set length: {len(terminal_set)}")
+        #     print(f"orig_terminal_set[0]: {orig_terminal_set[0]}")
+        #     print(f"terminal_set[0]: {terminal_set[0]}")
         # 4. Build bracketed set (O(R))
         bracketed_set = set()
         if self.opts['use_hnf']:
@@ -560,11 +569,13 @@ class PCFG():
             self.filler_name_to_idx[fname] = i
 
             # All property checks are now O(1) set membership tests
+            # if fname in terminal_set:
+            #     print(f"at index {i}, {fname} is in terminal set")
             self.filler_is_terminal[i] = fname in terminal_set
             self.filler_is_copy[i] = copy_symbol in fname
             self.filler_is_bracketed[i] = fname in bracketed_set
             self.filler_is_root[i] = fname in roots_set
-
+        # print(f"self.filler_is_terminal is {self.filler_is_terminal}")
         elapsed = time.time() - t0
         print(
             f"    Fast lookups built in {elapsed:.3f}s ({num_fillers} fillers, {num_rules} rules)")
@@ -1641,6 +1652,7 @@ class HarmonicGrammar():
         print("Optimizing HarmonicGrammar with fast lookups...")
         # Note: g0's fast lookups already created in PCFG.__init__
         # self.g is a deepcopy, so copy the lookups
+        self.g._create_fastER_lookups_pcfg()
         if hasattr(self.g0, 'filler_name_to_idx'):
             self.g.filler_name_to_idx = self.g0.filler_name_to_idx.copy()
             self.g.filler_is_terminal = self.g0.filler_is_terminal.copy()

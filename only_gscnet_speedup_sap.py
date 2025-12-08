@@ -2062,7 +2062,12 @@ class GscNet():
                         update_count += 1
         # dur = time.time() - t1
         # print('{} ms for implementing binrary HG rules'.format(dur))
-
+        # print("AFTER Binary/Copy Rules")
+        # print(f"WC sum: {np.sum(self.WC)}")
+        # print(f"WC diagonal sum: {np.sum(np.diag(self.WC))}")
+        # print(f"WC[1,1]: {self.WC[1,1]}")
+        # print(f"WC[2,2]: {self.WC[2,2]}")
+        # print(f"WC[4,4]: {self.WC[4,4]}")
         # Competition rules =========================
         print(f"    Processing competition rules...")
         cumulative = False
@@ -2126,7 +2131,12 @@ class GscNet():
                             b2name = rule['f2'] + bsep + focus_mother_role
                             self.set_weight(b1name, b2name, rule['H'],
                                             cumulative=True, c2n=False)
-
+        # print("AFTER Null Rules")
+        # print(f"WC sum: {np.sum(self.WC)}")
+        # print(f"WC diagonal sum: {np.sum(np.diag(self.WC))}")
+        # print(f"WC[1,1]: {self.WC[1,1]}")
+        # print(f"WC[2,2]: {self.WC[2,2]}")
+        # print(f"WC[4,4]: {self.WC[4,4]}")
         # Unary rules
         print(f"    Processing unary rules...")
         self.bC = np.zeros(self.num_bindings)
@@ -2136,8 +2146,17 @@ class GscNet():
                 self.set_filler_bias(rule['f1'], rule['H'], c2n=False)
         else:
             sys.exit('CHECK "unary_base"!')
-
+        # print("AFTER Unary Rules (bC set)")
+        # print(f"WC sum: {np.sum(self.WC)}")
+        # print(f"WC diagonal sum: {np.sum(np.diag(self.WC))}")
+        # print(f"WC[1,1]: {self.WC[1,1]}")
+        # print(f"WC[2,2]: {self.WC[2,2]}")
+        # print(f"WC[4,4]: {self.WC[4,4]}")
+        # print(f"bC[1]: {self.bC[1]}")
+        # print(f"bC[2]: {self.bC[2]}")
+        # print(f"bC[4]: {self.bC[4]}")
         # Additional constraints (penalty for ungrammatical bindings)
+        # root_bias_update_count = 0
         if H_root_illegitimate < 0:
             # for rname in roles.role_names:
             for ri in range(len(roles.role_names)):
@@ -2149,19 +2168,27 @@ class GscNet():
                         bnames = [f + bsep + rname
                                   for f in self.hg.get_roots()]
                         self.set_bias(bnames, H_root_illegitimate, c2n=False)
+                        # root_bias_update_count += len(bnames)
                 elif role_system == 'span_role':
                     rname_tuple = roles.str2tuple(rname)
                     if rname_tuple[0] > 1:
                         bnames = [f + bsep + rname
                                   for f in self.hg.get_roots()]
                         self.set_bias(bnames, H_root_illegitimate, c2n=False)
+                        # root_bias_update_count += len(bnames)
                 elif role_system == 'recursive_role':
                     role_root = roles.opts['root']
                     if rname != role_root:
                         bnames = [f + bsep + rname
                                   for f in self.hg.get_roots()]
                         self.set_bias(bnames, H_root_illegitimate, c2n=False)
-
+        #                 root_bias_update_count+= len(bnames)
+        # print(f"After H_root: {root_bias_update_count} bias updates")
+        # print(f"bC sum: {np.sum(self.bC)}")
+        # print(f"bC[1]: {self.bC[1]}")
+        # print(f"bC[2]: {self.bC[2]}")
+        # print(f"bC[4]: {self.bC[4]}")
+        # terminal_bias_update_count = 0
         if H_terminal_illegitimate < 0:
             # for rname in roles.role_names:
             for ri in range(len(roles.role_names)):
@@ -2170,15 +2197,32 @@ class GscNet():
                     # lv, pos = roles.str2tuple(rname)
                     lv, pos = roles.role_tuples[ri]
                     if lv != 1:
-                        # bnames = [f + bsep + rname
+                        # orig_bnames = [f + bsep + rname
                         #           for f in self.hg.g.get_fillers()
                         #           if self.hg.g.is_terminal(f)]
                         terminal_fi = np.where(self.hg.g.filler_is_terminal)[0]
+                        # print(f"{self.hg.g.get_fillers()}")
+                        # print(f"{self.hg.g.filler_names}")
+                        # print(f"{np.where(self.hg.g.filler_is_terminal)}")
+                        # print(f"terminal_fi: {terminal_fi}")
                         bnames = [self.hg.g.filler_names[fi] +
                                   bsep + rname for fi in terminal_fi]
+                        # if orig_bnames != bnames:
+                        #     print(f"orig_bnames: {orig_bnames}")
+                        #     print(f"bnames: {bnames}")
+                        #     print(f"Are they the same? {orig_bnames == bnames}")
+                        #     print(f"Are they identical object? {orig_bnames is bnames}")
+                        #     print(f"orig_bnames length: {len(orig_bnames)}")
+                        #     print(f"bnames length: {len(bnames)}")
+                        terminal_bias_update_count += len(bnames)
                         self.set_bias(
                             bnames, H_terminal_illegitimate, c2n=False)
-
+        # print(f"After H_terminal: {terminal_bias_update_count} bias updates")
+        # print(f"bC sum: {np.sum(self.bC)}")
+        # print(f"bC[1]: {self.bC[1]}")
+        # print(f"bC[2]: {self.bC[2]}")
+        # print(f"bC[4]: {self.bC[4]}")
+        # nonterminal_bias_update_count = 0
         if H_nonterminal_illegitimate < 0:
             # for rname in roles.role_names:
             for ri in range(len(roles.role_names)):
@@ -2199,8 +2243,15 @@ class GscNet():
                             nonterminal_fi = nonterminal_fi[nonterminal_fi != null_idx]
                         bnames = [self.hg.g.filler_names[fi] +
                                   bsep + rname for fi in nonterminal_fi]
+                        # nonterminal_bias_update_count += len(bnames)    
                         self.set_bias(
                             bnames, H_nonterminal_illegitimate, c2n=False)
+        # print(f"After H_nonterminal: {nonterminal_bias_update_count} bias updates")
+        # print(f"bC sum: {np.sum(self.bC)}")
+        # print(f"bC[1]: {self.bC[1]}")
+        # print(f"bC[2]: {self.bC[2]}")
+        # print(f"bC[4]: {self.bC[4]}")
+        # copy_bias_update_count = 0
         print(f"    Adding grammatical constraints...")
         if H_copy_illegitimate < 0:
             # for rname in roles.role_names:
@@ -2216,7 +2267,13 @@ class GscNet():
                         copy_fi = np.where(self.hg.g.filler_is_copy)[0]
                         bnames = [self.hg.g.filler_names[fi] +
                                   bsep + rname for fi in copy_fi]
+                        # copy_bias_update_count += len(bnames)       
                         self.set_bias(bnames, H_copy_illegitimate, c2n=False)
+        # print(f"After H_copy: {copy_bias_update_count} bias updates")
+        # print(f"bC sum: {np.sum(self.bC)}")
+        # print(f"bC[1]: {self.bC[1]}")
+        # print(f"bC[2]: {self.bC[2]}")
+        # print(f"bC[4]: {self.bC[4]}")
         # Convert WC to CSR BEFORE matrix multiplication (critical for performance!)
         if hasattr(self, 'use_sparse') and self.use_sparse:
             print(f"    Converting WC from Lil to CSR for efficient operations...")
@@ -2237,9 +2294,23 @@ class GscNet():
             print(
                 f"      WC: {nnz_after:,} non-zero elements ({sparsity:.4f}% sparse)")
             print(f"      Conversion took {time.time() - t_convert:.2f}s")
-
+        # After all constraint rules (H_root_illegitimate, etc.)
+        # print("AFTER All Constraint Rules")
+        # print(f"WC sum: {np.sum(self.WC)}")
+        # print(f"WC diagonal sum: {np.sum(np.diag(self.WC))}")
+        # print(f"bC sum: {np.sum(self.bC)}")
+        # print(f"bC[1]: {self.bC[1]}")
+        # print(f"bC[2]: {self.bC[2]}")
+        # print(f"bC[4]: {self.bC[4]}")
         print(f"    Setting weights...")
         self._set_weights()
+        # AFTER _set_weights() is called
+        # print("AFTER _set_weights()")
+        # print(f"WC sum: {np.sum(self.WC)}")
+        # print(f"WC diagonal sum: {np.sum(np.diag(self.WC))}")
+        # print(f"WC[1,1]: {self.WC[1,1]}")
+        # print(f"WC[2,2]: {self.WC[2,2]}")
+        # print(f"WC[4,4]: {self.WC[4,4]}")
         print(f"    Setting biases...")
         self._set_biases()
         dur = time.time() - t_start
