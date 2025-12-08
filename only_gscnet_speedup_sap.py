@@ -1620,6 +1620,26 @@ class GscNet():
 
         return np.concatenate(result) if result else np.array([], dtype=np.int32)
 
+
+    # def find_bindings(self, binding_names):
+    #     '''Return (list) of binding indices for a given binding_names (str or list).
+
+    #     Args:
+    #         binding_names: (str) binding name or
+    #                        (list of str) binding names
+
+    #     Precondition:
+    #         binding_names must contain legitimate binding names.
+
+    #     Examples:
+    #         >>> net.find_bindings('A/0')
+    #         >>> net.find_bindings(['A/0', 'B/0'])
+    #     '''
+
+    #     if not isinstance(binding_names, list):
+    #         binding_names = [binding_names]
+    #     return [self.binding_names.index(bb) for bb in binding_names]
+
     def find_bindings_fast(self, bnames):
         '''Fast O(1) version of find_bindings.'''
         if not isinstance(bnames, list):
@@ -1998,7 +2018,18 @@ class GscNet():
             if f2 not in f2_indices:
                 f2_indices[f2] = {ri: self.binding_name_to_idx.get(f2 + bsep + roles.role_names[ri], -1)
                                   for ri in range(len(roles.role_names))}
+            # print(f"SPEEDUP DATA STRUCTURE check")
+            # for ri in range(len(self.hg.roles.role_names)):
+            #     # 1. Verify index caching
+            #     if f1_indices[f1][ri] != self.binding_name_to_idx[f1 + bsep + self.hg.roles.role_names[ri]]:
+            #         print(f"f1_indices fails at {ri}")
 
+            #     # 2. Verify pre-computed arrays
+            #     if self.hg.roles.role_is_bracketed[ri] != self.hg.roles.is_bracketed(self.hg.roles.role_names[ri]):
+            #         print(f"role_is_bracketed fails at {ri}")
+            
+            #     if tuple(self.hg.roles.role_tuples[ri]) != self.hg.roles.str2tuple(self.hg.roles.role_names[ri]):
+            #         print(f"role_tuples fails at {ri}")
             # Now process roles without string operations
             # for role in roles.role_names:
             for ri in range(len(self.hg.role_names)):
@@ -2317,9 +2348,14 @@ class GscNet():
             >>> net.set_weight('A/0', 'B/1', 2.)
             >>> net.set_weight('A/0', ['B/1', 'C/2'], 2.)
         '''
-
+        # idx1_orig = self.find_bindings(bname1)
+        # idx2_orig = self.find_bindings(bname2)
         idx1 = self.find_bindings_fast(bname1)
         idx2 = self.find_bindings_fast(bname2)
+        # if idx1_orig != idx1:
+        #     print(f"find_bindings_fast() fails at {bname1}")
+        # elif idx2 != idx2_orig:
+        #     print(f"find_bindings_fast() fails at {bname2}")
         # For sparse matrices, we need special handling
         is_sparse = hasattr(self, 'use_sparse') and self.use_sparse
 
@@ -3483,9 +3519,10 @@ class GscNet():
                         idx = self.role_to_binding_indices[ri]
                         if len(idx) > 0:
                             idx_array = np.array(idx)
-                            # Diagonal entries only (much more efficient than meshgrid)
-                            row_list.append(idx_array)
-                            col_list.append(idx_array)
+                            # Use meshgrid to get ALL pairs within the role
+                            rows_self, cols_self = np.meshgrid(idx_array, idx_array, indexing='ij')
+                            row_list.append(rows_self.ravel())
+                            col_list.append(cols_self.ravel())
                         if not self.hg.roles.role_is_terminal[ri]:
                             indices = self.get_role_and_daughter_indices_fast(ri)
                             if indices != None:
@@ -3551,8 +3588,9 @@ class GscNet():
                     idx = self.role_to_binding_indices[ri]
                     if len(idx) > 0:
                         idx_array = np.array(idx)
-                        row_list.append(idx_array)
-                        col_list.append(idx_array)
+                        rows_self, cols_self = np.meshgrid(idx_array, idx_array, indexing='ij')
+                        row_list.append(rows_self.ravel())
+                        col_list.append(cols_self.ravel())
                     if not self.hg.roles.role_is_terminal[ri]:
                         indices = self.get_role_and_daughter_indices_fast(ri)
                         if indices != None:
