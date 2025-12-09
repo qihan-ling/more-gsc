@@ -32,205 +32,205 @@ MAXLEN = 5
 # Initialize network with paper's specifications
 # ============================================================================
 
-# hg = gsc.HarmonicGrammar(pcfg=PCFG_G1, root=ROOT, max_sent_len=MAXLEN)
+hg = gsc.HarmonicGrammar(pcfg=PCFG_G1, root=ROOT, max_sent_len=MAXLEN)
 
-# # Display fillers (should have 27 fillers × 15 roles = 405 units)
-# print(f"Filler names: {hg.filler_names}")
-# print(f"Number of fillers: {len(hg.filler_names)}")
+# Display fillers (should have 27 fillers × 15 roles = 405 units)
+print(f"Filler names: {hg.filler_names}")
+print(f"Number of fillers: {len(hg.filler_names)}")
 
-# # Set all filler similarities to 0 (linear independence)
-# sim = hg.get_simlist(dp=0.0)
+# Set all filler similarities to 0 (linear independence)
+sim = hg.get_simlist(dp=0.0)
 
-# # ============================================================================
-# # CONFIGURATION: Toggle these to test different modes
-# # ============================================================================
-# USE_SPARSE = False      # True = sparse WC matrix, False = dense
-# USE_COMPRESSED = False  # True = compressed encodings, False = full dimension
-# # ============================================================================
+# ============================================================================
+# CONFIGURATION: Toggle these to test different modes
+# ============================================================================
+USE_SPARSE = False      # True = sparse WC matrix, False = dense
+USE_COMPRESSED = False  # True = compressed encodings, False = full dimension
+# ============================================================================
 
-# # Network options matching paper's parameters
-# net_opts = {
-#     #'use_jax': False,  # Sparse only supported on CPU currently
-#     'T_init': 0.01,      # computational temperature
-#     'q_max': 15.0,       # maximum commitment
-#     'q_init': 0.0,       # initial commitment (FIXED: was 'q_0')
-#     'dt_init': 0.005,    # time step (FIXED: was 'dt')
-#     'm': 30,             # resource constraint (Hq1 strength)
-#     'use_runC': True,    # use C implementation for speed
-#     'ep_method': 'integration',
-# }
-# if USE_SPARSE:
-#     net_opts['use_sparse_wc'] = True
+# Network options matching paper's parameters
+net_opts = {
+    #'use_jax': False,  # Sparse only supported on CPU currently
+    'T_init': 0.01,      # computational temperature
+    'q_max': 15.0,       # maximum commitment
+    'q_init': 0.0,       # initial commitment (FIXED: was 'q_0')
+    'dt_init': 0.005,    # time step (FIXED: was 'dt')
+    'm': 30,             # resource constraint (Hq1 strength)
+    'use_runC': True,    # use C implementation for speed
+    'ep_method': 'integration',
+}
+if USE_SPARSE:
+    net_opts['use_sparse_wc'] = True
 
-# encodings = {
-#     'similarity': sim,
-# }
-# if USE_COMPRESSED:
-#     encodings['dim_f'] = 150  # Compressed filler encoding
-#     encodings['dim_r'] = 60   # Compressed role encoding
+encodings = {
+    'similarity': sim,
+}
+if USE_COMPRESSED:
+    encodings['dim_f'] = 150  # Compressed filler encoding
+    encodings['dim_r'] = 60   # Compressed role encoding
 
-# # Initialize network
-# net = gsc.GscNet(hg=hg, encodings=encodings,
-#                  opts=net_opts, seed=1024)
+# Initialize network
+net = gsc.GscNet(hg=hg, encodings=encodings,
+                 opts=net_opts, seed=1024)
 
-# # ============================================================================
-# # DIAGNOSTIC: Verify what mode we're running in
-# # ============================================================================
-# print("\n" + "="*70)
-# print("MODE VERIFICATION:")
-# print("="*70)
-# print(f"  use_sparse: {getattr(net, 'use_sparse', False)}")
-# print(f"  WC type: {type(net.WC).__module__}.{type(net.WC).__name__}")
-# print(f"  WC shape: {net.WC.shape}")
-# if hasattr(net.WC, 'nnz'):
-#     print(f"  WC non-zeros: {net.WC.nnz:,} ({100*net.WC.nnz/net.WC.shape[0]/net.WC.shape[1]:.4f}% fill)")
-# print(f"  dim_f used: {net.dim_f if hasattr(net, 'dim_f') else 'N/A (full)'}")
-# print(f"  dim_r used: {net.dim_r if hasattr(net, 'dim_r') else 'N/A (full)'}")
-# print(f"  num_fillers: {net.num_fillers}")
-# print(f"  num_roles: {net.num_roles}")
-# print(f"  num_bindings: {net.num_bindings}")
-# print("="*70 + "\n")
+# ============================================================================
+# DIAGNOSTIC: Verify what mode we're running in
+# ============================================================================
+print("\n" + "="*70)
+print("MODE VERIFICATION:")
+print("="*70)
+print(f"  use_sparse: {getattr(net, 'use_sparse', False)}")
+print(f"  WC type: {type(net.WC).__module__}.{type(net.WC).__name__}")
+print(f"  WC shape: {net.WC.shape}")
+if hasattr(net.WC, 'nnz'):
+    print(f"  WC non-zeros: {net.WC.nnz:,} ({100*net.WC.nnz/net.WC.shape[0]/net.WC.shape[1]:.4f}% fill)")
+print(f"  dim_f used: {net.dim_f if hasattr(net, 'dim_f') else 'N/A (full)'}")
+print(f"  dim_r used: {net.dim_r if hasattr(net, 'dim_r') else 'N/A (full)'}")
+print(f"  num_fillers: {net.num_fillers}")
+print(f"  num_roles: {net.num_roles}")
+print(f"  num_bindings: {net.num_bindings}")
+print("="*70 + "\n")
 
-# net.generate_corpus(use_freq=True, nsamples=5000)
+net.generate_corpus(use_freq=True, nsamples=5000)
 
-# # Display target probabilities
-# print("\n" + "="*70)
-# print("Target sentence probabilities (first 10):")
-# for si, sent in enumerate(net.corpus['sentence'][:10]):
-#     sent_str = ' '.join([bname.split('/')[0] for bname in sent])
-#     prob = net.corpus['prob_sent'][si]
-#     print(f"Sentence {si}: p = {prob:.4f} ({sent_str})")
+# Display target probabilities
+print("\n" + "="*70)
+print("Target sentence probabilities (first 10):")
+for si, sent in enumerate(net.corpus['sentence'][:10]):
+    sent_str = ' '.join([bname.split('/')[0] for bname in sent])
+    prob = net.corpus['prob_sent'][si]
+    print(f"Sentence {si}: p = {prob:.4f} ({sent_str})")
 
-# # ============================================================================
-# # Training setup (matching Section 4 parameters)
-# # ============================================================================
+# ============================================================================
+# Training setup (matching Section 4 parameters)
+# ============================================================================
 
-# # NOTE: Random seed is controlled by GscNet constructor (seed=1024 at line 70)
+# NOTE: Random seed is controlled by GscNet constructor (seed=1024 at line 70)
 
-# train_opts = {
-#     # double the learning rate because trial size increases from 4 to 500
-#     'lrate': 0.1,
-#     'num_trials': 4,               # production trials per iteration
-#     'ema_stat_weight': 0.0,        # no EMA smoothing initially
-#     'trace_varnames': ['kl_trees', 'kl_treelets', 'prob_sent', 'acc'],
-#     'report_cycle': 10,            # report every 10 iterations
-#     'init_noise_mag': 0.02,
-#     'average_weight': False,
-#     'average_filler_bias': False,
-# }
+train_opts = {
+    # double the learning rate because trial size increases from 4 to 500
+    'lrate': 0.1,
+    'num_trials': 4,               # production trials per iteration
+    'ema_stat_weight': 0.0,        # no EMA smoothing initially
+    'trace_varnames': ['kl_trees', 'kl_treelets', 'prob_sent', 'acc'],
+    'report_cycle': 10,            # report every 10 iterations
+    'init_noise_mag': 0.02,
+    'average_weight': False,
+    'average_filler_bias': False,
+}
 
-# net.initialize(train_opts=train_opts)
+net.initialize(train_opts=train_opts)
 
-# # Diagnostic check
-# print("\nChecking mask0:")
-# mask0 = net.train_opts['mask0']
-# if hasattr(net, 'use_sparse') and net.use_sparse:
-#     print(f"  mask0 non-zero entries: {mask0.nnz:,}")
-#     if mask0.nnz == 0:
-#         print("  ❌ PROBLEM: mask0 is empty!")
-# else:
-#     import numpy as np
-#     nnz = np.count_nonzero(mask0)
-#     print(f"  mask0 non-zero entries: {nnz:,} / {mask0.size:,}")
-#     if nnz == 0:
-#         print("  ❌ PROBLEM: mask0 is all zeros!")
-# # ============================================================================
-# # DEBUG: Print WC statistics before training
-# # ============================================================================
-# print("\n" + "="*40)
-# print("=== WC Statistics BEFORE Training ===")
-# if hasattr(net, 'use_sparse') and net.use_sparse:
-#     print(f"  WC type: sparse, nnz={net.WC.nnz}")
-#     print(f"  WC sum: {net.WC.sum():.6f}")
-#     print(f"  WC diagonal sum: {net.WC.diagonal().sum():.6f}")
-#     print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
-#     # DEBUG: Print first 10 non-zero entries to compare with dense
-#     wc_coo = net.WC.tocoo()
-#     print(f"  First 10 non-zero entries (row, col, val):")
-#     for i in range(min(10, len(wc_coo.data))):
-#         print(f"    ({wc_coo.row[i]}, {wc_coo.col[i]}): {wc_coo.data[i]:.6f}")
-# else:
-#     print(f"  WC type: dense")
-#     print(f"  WC sum: {net.WC.sum():.6f}")
-#     print(f"  WC diagonal sum: {np.diag(net.WC).sum():.6f}")
-#     print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
-#     # DEBUG: Print first 10 non-zero entries to compare with sparse
-#     nonzero = np.nonzero(net.WC)
-#     print(f"  First 10 non-zero entries (row, col, val):")
-#     for i in range(min(10, len(nonzero[0]))):
-#         r, c = nonzero[0][i], nonzero[1][i]
-#         print(f"    ({r}, {c}): {net.WC[r, c]:.6f}")
-# print("=" * 40)
+# Diagnostic check
+print("\nChecking mask0:")
+mask0 = net.train_opts['mask0']
+if hasattr(net, 'use_sparse') and net.use_sparse:
+    print(f"  mask0 non-zero entries: {mask0.nnz:,}")
+    if mask0.nnz == 0:
+        print("  ❌ PROBLEM: mask0 is empty!")
+else:
+    import numpy as np
+    nnz = np.count_nonzero(mask0)
+    print(f"  mask0 non-zero entries: {nnz:,} / {mask0.size:,}")
+    if nnz == 0:
+        print("  ❌ PROBLEM: mask0 is all zeros!")
+# ============================================================================
+# DEBUG: Print WC statistics before training
+# ============================================================================
+print("\n" + "="*40)
+print("=== WC Statistics BEFORE Training ===")
+if hasattr(net, 'use_sparse') and net.use_sparse:
+    print(f"  WC type: sparse, nnz={net.WC.nnz}")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {net.WC.diagonal().sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+    # DEBUG: Print first 10 non-zero entries to compare with dense
+    wc_coo = net.WC.tocoo()
+    print(f"  First 10 non-zero entries (row, col, val):")
+    for i in range(min(10, len(wc_coo.data))):
+        print(f"    ({wc_coo.row[i]}, {wc_coo.col[i]}): {wc_coo.data[i]:.6f}")
+else:
+    print(f"  WC type: dense")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {np.diag(net.WC).sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+    # DEBUG: Print first 10 non-zero entries to compare with sparse
+    nonzero = np.nonzero(net.WC)
+    print(f"  First 10 non-zero entries (row, col, val):")
+    for i in range(min(10, len(nonzero[0]))):
+        r, c = nonzero[0][i], nonzero[1][i]
+        print(f"    ({r}, {c}): {net.WC[r, c]:.6f}")
+print("=" * 40)
 
-# # DEBUG: Test dynamics computation
-# print("\n=== Dynamics Test ===")
-# test_actC = np.random.RandomState(42).rand(net.num_bindings)
-# if hasattr(net, 'use_sparse') and net.use_sparse:
-#     wc_dot_result = net.WC.dot(test_actC)
-# else:
-#     wc_dot_result = net.WC.dot(test_actC)
-# print(f"  WC.dot(test_actC) sum: {wc_dot_result.sum():.10f}")
-# print(f"  WC.dot(test_actC) first 5: {wc_dot_result[:5]}")
-# print("=" * 40)
+# DEBUG: Test dynamics computation
+print("\n=== Dynamics Test ===")
+test_actC = np.random.RandomState(42).rand(net.num_bindings)
+if hasattr(net, 'use_sparse') and net.use_sparse:
+    wc_dot_result = net.WC.dot(test_actC)
+else:
+    wc_dot_result = net.WC.dot(test_actC)
+print(f"  WC.dot(test_actC) sum: {wc_dot_result.sum():.10f}")
+print(f"  WC.dot(test_actC) first 5: {wc_dot_result[:5]}")
+print("=" * 40)
 
-# # ============================================================================
-# # Training loop for Figure 11
-# # ============================================================================
+# ============================================================================
+# Training loop for Figure 11
+# ============================================================================
 
-# print("\n" + "="*70)
-# print("Training Grammar 1...")
-# print("="*70)
+print("\n" + "="*70)
+print("Training Grammar 1...")
+print("="*70)
 
-# # Train for sufficient epochs to reach convergence
-# n_epochs = 1000
+# Train for sufficient epochs to reach convergence
+n_epochs = 1000
 
-# # NOTE: No seed reset before training - use natural random state from seed 41
-# # The random state consumption bug in estimate_prob_inc_jax has been fixed,
-# # so sparse and dense will now follow identical trajectories without a reset.
-# # This restores Round 8's better-performing training trajectory.
+# NOTE: No seed reset before training - use natural random state from seed 41
+# The random state consumption bug in estimate_prob_inc_jax has been fixed,
+# so sparse and dense will now follow identical trajectories without a reset.
+# This restores Round 8's better-performing training trajectory.
 
-# #exec(open('debug_training_update.py').read())
-# #exec(open('debug_weight_update.py').read())
-# #exec(open('debug_across_10epoch_update.py').read())
-# for epoch_block in range(n_epochs // 5):
-#     net.train2(
-#         train_opts={'num_epochs': 5},
-#         savefilename='sap_g1_model_orig.pkl'
-#     )
+#exec(open('debug_training_update.py').read())
+#exec(open('debug_weight_update.py').read())
+#exec(open('debug_across_10epoch_update.py').read())
+for epoch_block in range(n_epochs // 5):
+    net.train2(
+        train_opts={'num_epochs': 5},
+        savefilename='sap_g1_model_orig.pkl'
+    )
 
-# print("\n" + "="*70)
-# print("Training complete!")
+print("\n" + "="*70)
+print("Training complete!")
 
-# # DEBUG: Print WC statistics after training
-# print("\n" + "="*40)
-# print("=== WC Statistics AFTER Training ===")
-# if hasattr(net, 'use_sparse') and net.use_sparse:
-#     print(f"  WC type: sparse, nnz={net.WC.nnz}")
-#     print(f"  WC sum: {net.WC.sum():.6f}")
-#     print(f"  WC diagonal sum: {net.WC.diagonal().sum():.6f}")
-#     print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
-# else:
-#     print(f"  WC type: dense")
-#     print(f"  WC sum: {net.WC.sum():.6f}")
-#     print(f"  WC diagonal sum: {np.diag(net.WC).sum():.6f}")
-#     print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
-# print("=" * 40)
+# DEBUG: Print WC statistics after training
+print("\n" + "="*40)
+print("=== WC Statistics AFTER Training ===")
+if hasattr(net, 'use_sparse') and net.use_sparse:
+    print(f"  WC type: sparse, nnz={net.WC.nnz}")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {net.WC.diagonal().sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+else:
+    print(f"  WC type: dense")
+    print(f"  WC sum: {net.WC.sum():.6f}")
+    print(f"  WC diagonal sum: {np.diag(net.WC).sum():.6f}")
+    print(f"  WC max: {net.WC.max():.6f}, min: {net.WC.min():.6f}")
+print("=" * 40)
 
-# # Calculate final statistics (last 100 updates)
-# # FIXED: Changed 'trace_train' to 'traces_train'
-# final_kl = np.mean(net.traces_train['kl_trees'][-100:])
-# final_kl_sd = np.std(net.traces_train['kl_trees'][-100:])
-# final_acc = np.mean(net.traces_train['acc'][-100:])
-# final_acc_sd = np.std(net.traces_train['acc'][-100:])
+# Calculate final statistics (last 100 updates)
+# FIXED: Changed 'trace_train' to 'traces_train'
+final_kl = np.mean(net.traces_train['kl_trees'][-100:])
+final_kl_sd = np.std(net.traces_train['kl_trees'][-100:])
+final_acc = np.mean(net.traces_train['acc'][-100:])
+final_acc_sd = np.std(net.traces_train['acc'][-100:])
 
-# print(f"Final KL divergence: {final_kl:.3f} (SD = {final_kl_sd:.3f})")
-# print(f"Final production accuracy: {final_acc:.3f} (SD = {final_acc_sd:.3f})")
+print(f"Final KL divergence: {final_kl:.3f} (SD = {final_kl_sd:.3f})")
+print(f"Final production accuracy: {final_acc:.3f} (SD = {final_acc_sd:.3f})")
 
-# # Display final learned probabilities
-# print("\nFinal learned probabilities Q(S):")
-# final_probs = np.mean(net.traces_train['prob_sent'][-100:], axis=0)
-# for si, prob in enumerate(final_probs):
-#     print(f"Sentence {si}: Q = {prob:.3f}")
+# Display final learned probabilities
+print("\nFinal learned probabilities Q(S):")
+final_probs = np.mean(net.traces_train['prob_sent'][-100:], axis=0)
+for si, prob in enumerate(final_probs):
+    print(f"Sentence {si}: Q = {prob:.3f}")
 
 # ============================================================================
 # Plot Figure 11 (Training dynamics)
