@@ -5474,7 +5474,7 @@ class GscNet():
 
         if hasattr(self, 'traces'):
             for key in trace_list:
-                self.traces[key] = list(self.traces[key])
+                self.traces[key] = []  # FIXED: Clear traces instead of copying old data
         else:
             self.traces = {}
             for key in trace_list:
