@@ -2214,7 +2214,7 @@ class GscNet():
                         #     print(f"Are they identical object? {orig_bnames is bnames}")
                         #     print(f"orig_bnames length: {len(orig_bnames)}")
                         #     print(f"bnames length: {len(bnames)}")
-                        terminal_bias_update_count += len(bnames)
+                        #terminal_bias_update_count += len(bnames)
                         self.set_bias(
                             bnames, H_terminal_illegitimate, c2n=False)
         # print(f"After H_terminal: {terminal_bias_update_count} bias updates")
@@ -3346,7 +3346,7 @@ class GscNet():
             actCmat = self.vec2mat(actC=self.actC)
         else:
             actCmat = self.vec2mat(actC=actC)
-        if isinstance(actCmat, jax.Array):
+        if self.use_jax and isinstance(actCmat, jax.Array):
             winner_idx = jnp.argmax(actCmat, axis=0)
         else:
             winner_idx = np.argmax(actCmat, axis=0)
@@ -4849,8 +4849,11 @@ class GscNet():
                                 # Extract submatrix (np.ix_() works correctly with scipy sparse)
                                 key_submatrix = mask0_csr[np.ix_(key_idx, key_idx)]
 
-                                # Get non-zero positions
-                                sub_rows, sub_cols = key_submatrix.nonzero()
+                                # Get non-zero positions AND their values
+                                key_submatrix_coo = key_submatrix.tocoo()
+                                sub_rows = key_submatrix_coo.row
+                                sub_cols = key_submatrix_coo.col
+                                mask_values = key_submatrix_coo.data  # <-- GET THE ACTUAL MASK VALUES
                                 
                                 # Convert to full matrix indices
                                 valid_rows = key_idx[sub_rows]
@@ -4859,16 +4862,17 @@ class GscNet():
                                 # DIAGNOSTIC: Track statistics
                                 _diag_tree_count += 1
                                 _diag_pos_count += len(valid_rows)
-                                _diag_val_sum += coef_val * len(valid_rows)
+                                _diag_val_sum += (coef_val * mask_values).sum()  # <-- Use mask values directly
 
                                 # FIX: Accumulate into dictionary to properly handle 
                                 # duplicate positions (same as dense += behavior)
-                                for r, c in zip(valid_rows, valid_cols):
+                                for r, c, mask_val in zip(valid_rows, valid_cols, mask_values):
                                     pos = (r, c)
+                                    grad_contribution = coef_val * mask_val  # <-- APPLY MASK WEIGHT
                                     if pos in grad_dict:
-                                        grad_dict[pos] += coef_val
+                                        grad_dict[pos] += grad_contribution
                                     else:
-                                        grad_dict[pos] = coef_val
+                                        grad_dict[pos] = grad_contribution
                             else:
                                 # Dense path (fallback)
                                 state = np.zeros(self.num_bindings)
@@ -4920,7 +4924,7 @@ class GscNet():
                     small_vals = [v for v in grad_dict.values() if 0 < abs(v) < 1e-10]
                     if small_vals:
                         print(f"      WARNING: {len(small_vals)} values smaller than 1e-10!")
-
+            # NOTE: mask0 is non-binary
             # Process treelet gradients
             if self.train_opts['coef']['treelets'] > 0.:
                 for key, val in err['treelets'].items():

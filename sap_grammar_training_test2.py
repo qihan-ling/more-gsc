@@ -195,7 +195,7 @@ n_epochs = 1000
 for epoch_block in range(n_epochs // 5):
     net.train2(
         train_opts={'num_epochs': 5},
-        savefilename='sap_g1_model_sparse_nocompress.pkl'
+        savefilename='sap_g1_model_fixed_sparse_nocompress.pkl'
     )
 
 print("\n" + "="*70)
@@ -236,7 +236,7 @@ for si, prob in enumerate(final_probs):
 # Plot Figure 11 (Training dynamics)
 # ============================================================================
 
-net = gsc.load_model('sap_g1_model_sparse_nocompress.pkl')
+net = gsc.load_model('sap_g1_model_fixed_sparse_nocompress.pkl')
 
 
 # ============================================================================
@@ -289,7 +289,7 @@ print("Generating training plots (Figure 11)...")
 print("Note: plot_train_result() will display 3 separate plots")
 print("="*70)
 gsc.plot_train_result(
-    net, savefilename_prefix='sap_g1_model_sparse_nocompres', legend=True, linewidth=1.5)
+    net, savefilename_prefix='sap_g1_model_fixed_sparse_nocompress', legend=True, linewidth=1.5)
 
 # ============================================================================
 # Parsing tests for Figure 12
@@ -382,7 +382,7 @@ plt.legend(loc='best', fontsize=10, framealpha=0.9)
 plt.grid(True, alpha=0.3)
 plt.ylim([0, 1.05])
 plt.tight_layout()
-plt.savefig('sap_g1_model_sparse_nocompres_parsing.png',
+plt.savefig('sap_g1_model_fixed_sparse_nocompress_parsing.png',
             dpi=300, bbox_inches='tight')
 # plt.show()
 
@@ -466,7 +466,7 @@ def plot_sentence_treelets(net, sent, sent_idx, target):
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    filename = f'sap_g1_model_sparse_nocompres_S{sent_idx}_{word_seq.replace(" ", "_")}.png'
+    filename = f'sap_g1_model_fixed_sparse_nocompress_S{sent_idx}_{word_seq.replace(" ", "_")}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     # plt.show()
 
