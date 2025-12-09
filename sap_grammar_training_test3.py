@@ -323,7 +323,8 @@ for t in commitment_levels:
 
     # Test parsing using gsc.test_parse_inc
     try:
-        np.random.seed(1024 + t)
+        # FIXED: Don't reset seed per commitment - use natural random progression
+        # np.random.seed(1024 + t)  # ← REMOVED: This caused non-comparable results
         parse_results = gsc.test_parse_inc(
             net,
             dq=dq,
@@ -416,7 +417,8 @@ def plot_sentence_treelets(net, sent, sent_idx, target):
     print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
 
     # Reset network and run on this specific sentence with trace logging
-    np.random.seed(1024 + sent_idx)
+    # FIXED: Don't reset seed per sentence - use natural random progression like cho_grammar1.py
+    # np.random.seed(1024 + sent_idx)  # ← REMOVED
     net.reset(mu=net.ep, sd=0.01)
     net.initialize_traces(trace_list='all')
 
