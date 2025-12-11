@@ -30,15 +30,29 @@ When `finalize_traces()` converts traces to numpy arrays, the next `initialize_t
 - Sentence 2: traces = S0 + S1 + S2 data (MORE MIXED!)
 - Result: All sentences show same/wrong treelet activations
 
-**Fix Applied:**
+**Fix Applied (commit 011c3a8):**
 ```python
-# FIXED CODE:
+# PARTIAL FIX (cleared but didn't log initial state):
 if hasattr(self, 'traces'):
     for key in trace_list:
         self.traces[key] = []  # ← Properly clears!
 ```
 
-**Status:** ✅ Fixed in both files (commit 011c3a8)
+**Complete Fix (commit 25f4ce9):**
+```python
+# COMPLETE FIX (clears AND logs initial state):
+if hasattr(self, 'traces'):
+    for key in trace_list:
+        self.traces[key] = []
+    self.update_traces()  # ← Logs initial state!
+```
+
+**Why the update_traces() call is critical:**
+- Without it, only the first sentence gets the initial state logged
+- Subsequent sentences miss the initial timestep, causing misaligned traces
+- Both branches (first call and re-initialization) must log initial state
+
+**Status:** ✅ FULLY FIXED in both files (commits 011c3a8, 25f4ce9)
 
 ---
 
@@ -70,7 +84,7 @@ for t in commitment_levels:
 **Fix:**
 Remove the `np.random.seed(1024 + t)` line from the commitment level loop.
 
-**Status:** ⚠️ NOT YET FIXED
+**Status:** ✅ FIXED in both test scripts (commit b014fa9)
 
 ---
 
@@ -102,7 +116,7 @@ Either:
 - Option A: Run training first and save model
 - Option B: Remove model loading and train inline like cho_grammar1.py
 
-**Status:** ⚠️ NOT YET FIXED
+**Status:** ✅ RESOLVED (model training is active in test scripts)
 
 ---
 
@@ -173,8 +187,8 @@ After applying all fixes, verify:
 
 ## Files Modified
 
-1. ✅ `gsc.py:3504` - Fixed initialize_traces
-2. ✅ `only_gscnet_speedup_sap.py:5477` - Fixed initialize_traces
-3. ⚠️ `sap_grammar_training_test2.py:326` - Remove seed reset (TODO)
-4. ⚠️ `sap_grammar_training_test3.py:326` - Remove seed reset (TODO)
-5. ⚠️ Both test scripts - Fix model loading/training (TODO)
+1. ✅ `gsc.py:3504-3505` - Fixed initialize_traces (commits 011c3a8, 25f4ce9)
+2. ✅ `only_gscnet_speedup_sap.py:5477-5478` - Fixed initialize_traces (commits 011c3a8, 25f4ce9)
+3. ✅ `sap_grammar_training_test2.py:421` - Removed seed reset (commit b014fa9)
+4. ✅ `sap_grammar_training_test3.py:326` - Removed seed reset (commit b014fa9)
+5. ✅ Both test scripts - Model training is active
