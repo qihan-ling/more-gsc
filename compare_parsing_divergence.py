@@ -18,6 +18,12 @@ print("\nLoading models...")
 net_sparse = gsc_sparse.load_model('sap_g1_model_fixed_sparse_nocompress.pkl')
 net_orig = gsc_orig.load_model('sap_g1_model_orig.pkl')
 
+# CRITICAL FIX: Force use_jax=False to match training configuration
+# Training used use_jax=False, so parsing must too for random state sync
+if hasattr(net_sparse, 'use_jax'):
+    net_sparse.use_jax = False
+    print("✓ Forced sparse model to use_jax=False for random state synchronization")
+
 # Test on S3: "N BE Vpp P N" (fails at t=5: 30% vs 100%)
 sent_idx = 3
 sent = net_sparse.corpus['sentence'][sent_idx]

@@ -238,6 +238,14 @@ for si, prob in enumerate(final_probs):
 
 net = gsc.load_model('sap_g1_model_fixed_sparse_nocompress.pkl')
 
+# CRITICAL FIX: Force use_jax=False to match training configuration
+# Training used use_jax=False, so parsing must too for random state synchronization
+# Without this, reset() consumes different amounts of NumPy random numbers,
+# causing desynchronization between sparse and original implementations
+if hasattr(net, 'use_jax'):
+    net.use_jax = False
+    print("✓ Forced model to use_jax=False for random state synchronization with original implementation")
+
 
 # ============================================================================
 # DEBUG: Analyze WC structure after training
