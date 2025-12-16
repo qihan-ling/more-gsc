@@ -478,9 +478,18 @@ class PCFG():
                            if (self.opts['f_empty'] in rule['m']) or
                               (self.opts['f_root'] in rule['m'])]
         copy_rules = self.subset_copy_rules()
+
+        # OPTIMIZATION: Convert to sets for O(1) lookups instead of O(n) list searches
+        def rule_to_tuple(rule):
+            """Convert rule dict to hashable tuple for set operations"""
+            return (rule.get('m'), rule.get('d1'), rule.get('d2'), rule.get('p'))
+
+        copy_rules_set = {rule_to_tuple(rule) for rule in copy_rules}
+        expansion_rules_set = {rule_to_tuple(rule) for rule in expansion_rules}
+
         non_copy_rules = [rule for rule in self.rules
-                          if (rule not in copy_rules) and
-                             (rule not in expansion_rules)]
+                          if (rule_to_tuple(rule) not in copy_rules_set) and
+                             (rule_to_tuple(rule) not in expansion_rules_set)]
 
         copy_rules_sorted = sorted(copy_rules, key=lambda x: x['m'])
         non_copy_rules_sorted = sorted(non_copy_rules, key=lambda x: x['m'])
@@ -1948,22 +1957,35 @@ class HarmonicGrammar():
             # ADD binary rules
             roots = self.g.get_roots()
 
+            # OPTIMIZATION: Convert rules to set for O(1) lookups instead of O(n) list searches
+            def rule_to_tuple(rule):
+                """Convert rule dict to hashable tuple for set operations"""
+                return (rule.get('m'), rule.get('d1'), rule.get('d2'), rule.get('p'))
+
+            existing_rules_set = {rule_to_tuple(rule) for rule in self.g.rules}
+
             for root in roots:
                 rule = {
                     'm': self.opts['f_root'],
                     'd1': root, 'd2': self.opts['f_empty_copy'], 'p': None}
-                if rule not in self.g.rules:
+                rule_tuple = rule_to_tuple(rule)
+                if rule_tuple not in existing_rules_set:
                     self.g.rules.append(rule)
+                    existing_rules_set.add(rule_tuple)
 
             rule = {'m': self.opts['f_empty_copy'],
                     'd1': None, 'd2': self.opts['f_empty'], 'p': None}
-            if rule not in self.g.rules:
+            rule_tuple = rule_to_tuple(rule)
+            if rule_tuple not in existing_rules_set:
                 self.g.rules.append(rule)
+                existing_rules_set.add(rule_tuple)
 
             rule = {'m': self.opts['f_empty_copy'],
                     'd1': None, 'd2': self.opts['f_empty_copy'], 'p': None}
-            if rule not in self.g.rules:
+            rule_tuple = rule_to_tuple(rule)
+            if rule_tuple not in existing_rules_set:
                 self.g.rules.append(rule)
+                existing_rules_set.add(rule_tuple)
 
             self.g._sort_rules()
             self.g._add_names()
