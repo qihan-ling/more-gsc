@@ -1856,6 +1856,15 @@ class HarmonicGrammar():
         # {'m': fname_m, 'd1': fname_d1, 'd2': fname_d2 }
         if self.opts['add_copy_rules']:
 
+            # OPTIMIZATION: Cache terminals/nonterminals to avoid O(n²) recomputation
+            # in is_terminal() calls within the loop
+            terminals_set = set(self.g.get_terminals())
+            nonterminals_set = set(self.g.get_nonterminals())
+
+            def is_terminal_cached(fname):
+                """Cached O(1) terminal check instead of O(n) is_terminal()"""
+                return fname in terminals_set
+
             rules_new = []
             rules_copy = []
             rules_copy_set = set()  # Fast O(1) lookup to avoid duplicates
@@ -1876,7 +1885,7 @@ class HarmonicGrammar():
 
                     # If a daughter has a non-terminal sister,
                     # replace the daughter with its copy version.
-                    if not self.g.is_terminal(d1) and not self.g.is_terminal(d2):
+                    if not is_terminal_cached(d1) and not is_terminal_cached(d2):
                         d1_copy = self.get_copy(d1)
                         d2_copy = self.get_copy(d2)
 
@@ -1907,7 +1916,7 @@ class HarmonicGrammar():
                                 rules_copy_set.add(rule_tuple)
                                 rules_copy.append(copy_rule)
 
-                    elif self.g.is_terminal(d1) and not self.g.is_terminal(d2):
+                    elif is_terminal_cached(d1) and not is_terminal_cached(d2):
                         d1_copy = self.get_copy(d1)
                         rule['d1'] = d1_copy
                         rules_new.append(rule)
@@ -1924,7 +1933,7 @@ class HarmonicGrammar():
                                 rules_copy_set.add(rule_tuple)
                                 rules_copy.append(copy_rule)
 
-                    elif not self.g.is_terminal(d1) and self.g.is_terminal(d2):
+                    elif not is_terminal_cached(d1) and is_terminal_cached(d2):
                         d2_copy = self.get_copy(d2)
                         rule['d2'] = d2_copy
                         rules_new.append(rule)
