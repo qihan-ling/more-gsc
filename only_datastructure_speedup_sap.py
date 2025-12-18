@@ -1646,6 +1646,13 @@ class HarmonicGrammar():
         self.rules = []
         self._rules_set = set()
         self._add_additional_rules()
+
+        # CRITICAL OPTIMIZATION: Build fast lookups RIGHT AFTER filler list stabilizes
+        # The filler list is now stable (copy symbols added in _add_additional_rules)
+        # This enables O(1) lookups for all subsequent rule-adding functions
+        print("Building fast lookup caches for subsequent operations...")
+        self.g._create_fastER_lookups_pcfg()
+
         print("Adding binary rules...")
         self._add_binary_rules()
         print(f"  Binary rules: {len(self.rules)} rules added")
@@ -1658,18 +1665,10 @@ class HarmonicGrammar():
         print("Adding expansion rules...")
         self._add_expansion_rules()
         print(f"  Total rules: {len(self.rules)}")
-        print("Optimizing HarmonicGrammar with fast lookups...")
-        # Note: g0's fast lookups already created in PCFG.__init__
-        # self.g is a deepcopy, so copy the lookups
-        self.g._create_fastER_lookups_pcfg()
-        if hasattr(self.g0, 'filler_name_to_idx'):
-            self.g.filler_name_to_idx = self.g0.filler_name_to_idx.copy()
-            self.g.filler_is_terminal = self.g0.filler_is_terminal.copy()
-            self.g.filler_is_copy = self.g0.filler_is_copy.copy()
-            self.g.filler_is_bracketed = self.g0.filler_is_bracketed.copy()
-            self.g.filler_is_root = self.g0.filler_is_root.copy()
-        # Roles fast lookups already created in BrickRole.__init__
-        print("Optimization complete!")
+
+        # Fast lookups already built after _add_additional_rules() (line ~1654)
+        # No need to rebuild. Roles fast lookups already created in BrickRole.__init__
+        print("Initialization complete!")
 
     def get_simlist(self, dp=0.5):
 
