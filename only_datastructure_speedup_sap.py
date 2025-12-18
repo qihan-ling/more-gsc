@@ -1640,12 +1640,6 @@ class HarmonicGrammar():
         self._update_opts(opts)
         self.pcfg_str = pcfg
         self.g0 = PCFG(pcfg=pcfg, root=root, opts=self.opts)  # original rule
-
-        # CRITICAL: Build fast lookups for g0 NOW for sentence generation
-        # g0 is used in generate_sentence() and needs rule indices for O(1) lookups
-        print("Building fast lookups for g0 (for sentence generation)...")
-        self.g0._create_fastER_lookups_pcfg()
-
         self.g = copy.deepcopy(self.g0)
         self._create_roles()
         self._add_names()
@@ -1655,9 +1649,13 @@ class HarmonicGrammar():
 
         # CRITICAL OPTIMIZATION: Build fast lookups RIGHT AFTER filler list stabilizes
         # The filler list is now stable (copy symbols added in _add_additional_rules)
-        # This enables O(1) lookups for all subsequent rule-adding functions
+        # Build caches in order: g first (augmented), then g0 (original for generation)
         print("Building fast lookup caches for subsequent operations...")
         self.g._create_fastER_lookups_pcfg()
+
+        # Build g0's cache for sentence generation (used in generate_sentence)
+        print("Building fast lookups for g0 (for sentence generation)...")
+        self.g0._create_fastER_lookups_pcfg()
 
         print("Adding binary rules...")
         self._add_binary_rules()
