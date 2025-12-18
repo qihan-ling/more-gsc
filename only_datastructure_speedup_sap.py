@@ -2159,42 +2159,54 @@ class HarmonicGrammar():
         val = self.opts['H_binary'] * 0.5
 
         if unary_base == 'filler':
+            # OPTIMIZATION: Cache lookups to avoid O(n) recomputation in loop
+            # These sets enable O(1) membership checks instead of O(n)
+            roots_set = set(self.g.get_roots())
+            terminals_set = set(self.g.get_terminals())
+
+            # Cache bracketed status for each filler (computed once)
+            # This avoids repeated is_bracketed() calls
+            bracketed_cache = {
+                filler: self.g.is_bracketed(filler)
+                for filler in self.g.filler_names
+            }
+
             for filler in self.g.filler_names:
 
                 # Assign -3 to non-terminal fillers
                 rule = {'f1': filler, 'f2': None,
                         'rel': '0', 'H': h_unary_3 * val, 'rule': 'unary',
-                        'br': self.g.is_bracketed(filler)}
+                        'br': bracketed_cache[filler]}
 
-                if use_hnf and (not self.g.is_bracketed(filler)):
+                if use_hnf and (not bracketed_cache[filler]):
                     # Update H if filler is unbracketed in HNF
                     rule = {'f1': filler, 'f2': None,
                             'rel': '0', 'H': h_unary_2 * val, 'rule': 'unary',
-                            'br': self.g.is_bracketed(filler)}
+                            'br': bracketed_cache[filler]}
 
-                if filler in self.g.get_roots():
+                if filler in roots_set:
                     rule = {'f1': filler, 'f2': None,
                             'rel': '0', 'H': root_bias * val, 'rule': 'unary',
-                            'br': self.g.is_bracketed(filler)}
+                            'br': bracketed_cache[filler]}
 
                 if filler == self.g.opts['null']:
                     rule = {'f1': filler, 'f2': None,
                             'rel': '0', 'H': null_bias, 'rule': 'unary',
-                            'br': self.g.is_bracketed(filler)}
+                            'br': bracketed_cache[filler]}
 
                 # if ('c' not in filler) and self.g.is_terminal(filler):
                 # PWC-20190731: I don't know why but self.opts['copy'] was
                 #             : unintendedly replaced with 'c', which is wrong.
-                if (self.opts['copy'] not in filler) and self.g.is_terminal(filler):
+                if (self.opts['copy'] not in filler) and (filler in terminals_set):
                     rule = {'f1': filler, 'f2': None,
                             'rel': '0', 'H': terminal_bias * val, 'rule': 'unary',
-                            'br': self.g.is_bracketed(filler)}
+                            'br': bracketed_cache[filler]}
 
                 if self.opts['copy'] in filler:
                     # copy symbols
                     rule = {'f1': filler, 'f2': None,
                             'rel': '0', 'H': h_unary_2 * val, 'rule': 'unary',
-                            'br': self.g.is_bracketed(filler)}
+                            'br': bracketed_cache[filler]}
 
                 if not self.has_rule(rule):
                     # self.rules.append(rule)
