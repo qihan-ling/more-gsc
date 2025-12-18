@@ -1640,6 +1640,12 @@ class HarmonicGrammar():
         self._update_opts(opts)
         self.pcfg_str = pcfg
         self.g0 = PCFG(pcfg=pcfg, root=root, opts=self.opts)  # original rule
+
+        # CRITICAL: Build fast lookups for g0 NOW for sentence generation
+        # g0 is used in generate_sentence() and needs rule indices for O(1) lookups
+        print("Building fast lookups for g0 (for sentence generation)...")
+        self.g0._create_fastER_lookups_pcfg()
+
         self.g = copy.deepcopy(self.g0)
         self._create_roles()
         self._add_names()
