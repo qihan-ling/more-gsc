@@ -478,9 +478,18 @@ class PCFG():
                            if (self.opts['f_empty'] in rule['m']) or
                               (self.opts['f_root'] in rule['m'])]
         copy_rules = self.subset_copy_rules()
+
+        # OPTIMIZATION: Convert to sets for O(1) lookups instead of O(n) list searches
+        def rule_to_tuple(rule):
+            """Convert rule dict to hashable tuple for set operations"""
+            return (rule.get('m'), rule.get('d1'), rule.get('d2'), rule.get('p'))
+
+        copy_rules_set = {rule_to_tuple(rule) for rule in copy_rules}
+        expansion_rules_set = {rule_to_tuple(rule) for rule in expansion_rules}
+
         non_copy_rules = [rule for rule in self.rules
-                          if (rule not in copy_rules) and
-                             (rule not in expansion_rules)]
+                          if (rule_to_tuple(rule) not in copy_rules_set) and
+                             (rule_to_tuple(rule) not in expansion_rules_set)]
 
         copy_rules_sorted = sorted(copy_rules, key=lambda x: x['m'])
         non_copy_rules_sorted = sorted(non_copy_rules, key=lambda x: x['m'])
@@ -1633,10 +1642,28 @@ class HarmonicGrammar():
         self.g0 = PCFG(pcfg=pcfg, root=root, opts=self.opts)  # original rule
         self.g = copy.deepcopy(self.g0)
         self._create_roles()
+        print('adding names...')
         self._add_names()
         self.rules = []
         self._rules_set = set()
+        print('adding additional rules...')
         self._add_additional_rules()
+        # CRITICAL OPTIMIZATION: Build fast lookups RIGHT AFTER filler list stabilizes
+        # The filler list is now stable (copy symbols added in _add_additional_rules)
+        # This enables O(1) lookups for all subsequent rule-adding functions
+        print("Optimizing HarmonicGrammar with fast lookups...")
+        print("Building fast lookup caches for subsequent operations...")
+        self.g._create_fastER_lookups_pcfg()
+        self.g0._create_fastER_lookups_pcfg()
+        # if hasattr(self.g, 'filler_name_to_idx'):
+        #     self.g0.filler_name_to_idx = self.g.filler_name_to_idx.copy()
+        #     self.g0.filler_is_terminal = self.g.filler_is_terminal.copy()
+        #     self.g0.filler_is_copy = self.g.filler_is_copy.copy()
+        #     self.g0.filler_is_bracketed = self.g.filler_is_bracketed.copy()
+        #     self.g0.filler_is_root = self.g.filler_is_root.copy()
+        #     self.g0.rules_by_mother = self.g.rules_by_mother.copy()
+        #     self.g0.rules_by_d1 = self.g.rules_by_d1.copy()
+        #     self.g0.rules_by_d2 = self.g.rules_by_d2.copy()
         print("Adding binary rules...")
         self._add_binary_rules()
         print(f"  Binary rules: {len(self.rules)} rules added")
@@ -1649,16 +1676,6 @@ class HarmonicGrammar():
         print("Adding expansion rules...")
         self._add_expansion_rules()
         print(f"  Total rules: {len(self.rules)}")
-        print("Optimizing HarmonicGrammar with fast lookups...")
-        # Note: g0's fast lookups already created in PCFG.__init__
-        # self.g is a deepcopy, so copy the lookups
-        self.g._create_fastER_lookups_pcfg()
-        if hasattr(self.g0, 'filler_name_to_idx'):
-            self.g.filler_name_to_idx = self.g0.filler_name_to_idx.copy()
-            self.g.filler_is_terminal = self.g0.filler_is_terminal.copy()
-            self.g.filler_is_copy = self.g0.filler_is_copy.copy()
-            self.g.filler_is_bracketed = self.g0.filler_is_bracketed.copy()
-            self.g.filler_is_root = self.g0.filler_is_root.copy()
         # Roles fast lookups already created in BrickRole.__init__
         print("Optimization complete!")
 
@@ -1846,7 +1863,14 @@ class HarmonicGrammar():
 
         # {'m': fname_m, 'd1': fname_d1, 'd2': fname_d2 }
         if self.opts['add_copy_rules']:
+            # OPTIMIZATION: Cache terminals/nonterminals to avoid O(n²) recomputation
+            # in is_terminal() calls within the loop
+            terminals_set = set(self.g.get_terminals())
+            nonterminals_set = set(self.g.get_nonterminals())
 
+            def is_terminal_cached(fname):
+                """Cached O(1) terminal check instead of O(n) is_terminal()"""
+                return fname in terminals_set
             rules_new = []
             rules_copy = []
             rules_copy_set = set()  # Fast O(1) lookup to avoid duplicates
@@ -1854,6 +1878,7 @@ class HarmonicGrammar():
             def rule_to_tuple(rule):
                 """Convert rule dict to hashable tuple for set operations"""
                 return (rule.get('m'), rule.get('d1'), rule.get('d2'), rule.get('p'))
+            print('looping through rules...')
             for rule in self.g.rules:
 
                 m = rule['m']
@@ -1867,7 +1892,7 @@ class HarmonicGrammar():
 
                     # If a daughter has a non-terminal sister,
                     # replace the daughter with its copy version.
-                    if not self.g.is_terminal(d1) and not self.g.is_terminal(d2):
+                    if not is_terminal_cached(d1) and not is_terminal_cached(d2):
                         d1_copy = self.get_copy(d1)
                         d2_copy = self.get_copy(d2)
 
@@ -1898,7 +1923,7 @@ class HarmonicGrammar():
                                 rules_copy_set.add(rule_tuple)
                                 rules_copy.append(copy_rule)
 
-                    elif self.g.is_terminal(d1) and not self.g.is_terminal(d2):
+                    elif is_terminal_cached(d1) and not is_terminal_cached(d2):
                         d1_copy = self.get_copy(d1)
                         rule['d1'] = d1_copy
                         rules_new.append(rule)
@@ -1915,7 +1940,7 @@ class HarmonicGrammar():
                                 rules_copy_set.add(rule_tuple)
                                 rules_copy.append(copy_rule)
 
-                    elif not self.g.is_terminal(d1) and self.g.is_terminal(d2):
+                    elif not is_terminal_cached(d1) and is_terminal_cached(d2):
                         d2_copy = self.get_copy(d2)
                         rule['d2'] = d2_copy
                         rules_new.append(rule)
@@ -1947,23 +1972,35 @@ class HarmonicGrammar():
         if self.opts['use_same_len']:
             # ADD binary rules
             roots = self.g.get_roots()
+            # OPTIMIZATION: Convert rules to set for O(1) lookups instead of O(n) list searches
+            def rule_to_tuple(rule):
+                """Convert rule dict to hashable tuple for set operations"""
+                return (rule.get('m'), rule.get('d1'), rule.get('d2'), rule.get('p'))
+
+            existing_rules_set = {rule_to_tuple(rule) for rule in self.g.rules}
 
             for root in roots:
                 rule = {
                     'm': self.opts['f_root'],
                     'd1': root, 'd2': self.opts['f_empty_copy'], 'p': None}
-                if rule not in self.g.rules:
+                rule_tuple = rule_to_tuple(rule)
+                if rule_tuple not in existing_rules_set:
                     self.g.rules.append(rule)
+                    existing_rules_set.add(rule_tuple)
 
             rule = {'m': self.opts['f_empty_copy'],
                     'd1': None, 'd2': self.opts['f_empty'], 'p': None}
-            if rule not in self.g.rules:
+            rule_tuple = rule_to_tuple(rule)
+            if rule_tuple not in existing_rules_set:
                 self.g.rules.append(rule)
+                existing_rules_set.add(rule_tuple)
 
             rule = {'m': self.opts['f_empty_copy'],
                     'd1': None, 'd2': self.opts['f_empty_copy'], 'p': None}
-            if rule not in self.g.rules:
+            rule_tuple = rule_to_tuple(rule)
+            if rule_tuple not in existing_rules_set:
                 self.g.rules.append(rule)
+                existing_rules_set.add(rule_tuple)
 
             self.g._sort_rules()
             self.g._add_names()
