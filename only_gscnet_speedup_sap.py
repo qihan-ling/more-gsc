@@ -3768,10 +3768,10 @@ class GscNet():
             nnz_after = self.WC.nnz
             if nnz_before != nnz_after:
                 print(f"PRE-TRAINING: Removed {nnz_before - nnz_after} explicit zeros from WC")
-            
-            wc_dense = self.WC.toarray()
-            wc_checksum = wc_dense.sum()
-            wc_abssum = np.abs(wc_dense).sum()
+
+            # Compute checksums directly on sparse matrix (no need to convert to dense)
+            wc_checksum = self.WC.sum()
+            wc_abssum = np.abs(self.WC.data).sum()  # Sum absolute values of non-zero elements
             print(f"INIT WC (SPARSE): sum={wc_checksum:.10f}, abssum={wc_abssum:.10f}, nnz={self.WC.nnz}")
         else:
             wc_checksum = self.WC.sum()
