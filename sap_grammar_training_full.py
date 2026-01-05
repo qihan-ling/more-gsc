@@ -40,7 +40,7 @@ net_opts = {
     'T_init': 0.01,      # computational temperature
     'q_max': 15.0,       # maximum commitment
     'q_init': 0.0,       # initial commitment (FIXED: was 'q_0')
-    'dt_init': 0.005,    # time step (FIXED: was 'dt')
+    'dt_init': 0.02,    # time step (FIXED: was 'dt')
     'm': 30,             # resource constraint (Hq1 strength)
     'use_runC': True,    # use C implementation for speed
     'ep_method': 'integration',
@@ -69,7 +69,8 @@ print(f"  use_sparse: {getattr(net, 'use_sparse', False)}")
 print(f"  WC type: {type(net.WC).__module__}.{type(net.WC).__name__}")
 print(f"  WC shape: {net.WC.shape}")
 if hasattr(net.WC, 'nnz'):
-    print(f"  WC non-zeros: {net.WC.nnz:,} ({100*net.WC.nnz/net.WC.shape[0]/net.WC.shape[1]:.4f}% fill)")
+    print(
+        f"  WC non-zeros: {net.WC.nnz:,} ({100*net.WC.nnz/net.WC.shape[0]/net.WC.shape[1]:.4f}% fill)")
 print(f"  dim_f used: {net.dim_f if hasattr(net, 'dim_f') else 'N/A (full)'}")
 print(f"  dim_r used: {net.dim_r if hasattr(net, 'dim_r') else 'N/A (full)'}")
 print(f"  num_fillers: {net.num_fillers}")
@@ -96,7 +97,7 @@ for si, sent in enumerate(net.corpus['sentence'][:10]):
 train_opts = {
     # double the learning rate because trial size increases from 4 to 500
     'lrate': 0.1,
-    'num_trials': 200,               # production trials per iteration
+    'num_trials': 50,               # production trials per iteration
     'ema_stat_weight': 0.0,        # no EMA smoothing initially
     'trace_varnames': ['kl_trees', 'kl_treelets', 'prob_sent', 'acc'],
     'report_cycle': 10,            # report every 10 iterations
@@ -175,9 +176,9 @@ n_epochs = 500
 # so sparse and dense will now follow identical trajectories without a reset.
 # This restores Round 8's better-performing training trajectory.
 
-#exec(open('debug_training_update.py').read())
-#exec(open('debug_weight_update.py').read())
-#exec(open('debug_across_10epoch_update.py').read())
+# exec(open('debug_training_update.py').read())
+# exec(open('debug_weight_update.py').read())
+# exec(open('debug_across_10epoch_update.py').read())
 for epoch_block in range(n_epochs // 5):
     net.train2(
         train_opts={'num_epochs': 5},
@@ -238,7 +239,7 @@ gsc.debug_wc_structure(
     # Check PP treelet weights (critical for "N Vi P N")
     treelet_rules=[
         ('PP[1]:1', 'P:0', 'N:1'),       # PP -> P N
-        ('VP[1]:1', '*Vi:0', 'PP[1]:1'), # VP -> *Vi PP (COPY of Vi)
+        ('VP[1]:1', '*Vi:0', 'PP[1]:1'),  # VP -> *Vi PP (COPY of Vi)
         ('S[2]:0', '*N:0', 'VP[1]:1'),   # S -> *N VP (COPY of N)
         # Also check copy rules
         ('*Vi:0', 'Vi:0', None),         # *Vi copies Vi
@@ -309,7 +310,7 @@ for t in commitment_levels:
 
     # Test parsing using gsc.test_parse_inc
     try:
-        #np.random.seed(1024 + t)
+        # np.random.seed(1024 + t)
         parse_results = gsc.test_parse_inc(
             net,
             dq=dq,
@@ -402,7 +403,7 @@ def plot_sentence_treelets(net, sent, sent_idx, target):
     print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
 
     # Reset network and run on this specific sentence with trace logging
-    #np.random.seed(1024 + sent_idx)
+    # np.random.seed(1024 + sent_idx)
     net.reset(mu=net.ep, sd=0.01)
     net.initialize_traces(trace_list='all')
 
@@ -477,4 +478,3 @@ for si, filename in enumerate(filenames):
     print(f"  - {filename}{marker}")
 print("="*70)
 print(f"Finished running at {time.time()-t0:.2f}s")
-
