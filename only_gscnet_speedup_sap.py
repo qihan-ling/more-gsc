@@ -3598,6 +3598,12 @@ class GscNet():
                     for ri in range(batch_start, batch_end):
                         # Add diagonal self-connections for ALL roles (terminal + non-terminal)
                         idx = self.role_to_binding_indices[ri]
+
+                        # DEBUG: Print role info to track progress
+                        if len(idx) > 1000:  # Only log roles with many bindings
+                            print(f"        Role {ri} ({self.hg.role_names[ri]}): {len(idx)} bindings")
+                            import sys; sys.stdout.flush()
+
                         if len(idx) > 0:
                             idx_array = np.array(idx)
                             # Use meshgrid to get ALL pairs within the role
@@ -3610,6 +3616,12 @@ class GscNet():
                                 idx = np.array(indices['self'])
                                 idx_l = np.array(indices['l'])
                                 idx_r = np.array(indices['r'])
+
+                                # DEBUG: Log large meshgrid operations
+                                total_pairs = len(idx) * (len(idx_l) + len(idx_r))
+                                if total_pairs > 100000:  # More than 100k pairs
+                                    print(f"        Role {ri} parent-daughter: {len(idx)}×{len(idx_l)}+{len(idx_r)} = {total_pairs:,} pairs")
+                                    import sys; sys.stdout.flush()
 
                                 # idx × idx_l (parent-left) + symmetric
                                 rows_pl, cols_pl = np.meshgrid(
