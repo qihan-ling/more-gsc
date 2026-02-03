@@ -163,7 +163,7 @@ for epoch_block in range(n_epochs // CHECKPOINT_INTERVAL):
         save_model_efficient(net, checkpoint_name)
 
         # Also maintain a "latest" checkpoint
-        save_model_efficient(net, 'sap_checkpoint_latest.pkl')
+        # save_model_efficient(net, 'sap_checkpoint_latest.pkl')
 
         # Log progress
         with open('training_progress_memory_safe.txt', 'a') as f:
