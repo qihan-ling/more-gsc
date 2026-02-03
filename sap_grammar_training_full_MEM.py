@@ -39,6 +39,7 @@ net_opts = {
     'm': 30,
     'use_runC': True,
     'ep_method': 'integration',
+    'dtype': 'float32',  # Use float32 for 50% memory savings vs float64
 }
 if USE_SPARSE:
     net_opts['use_sparse_wc'] = True
@@ -53,6 +54,7 @@ print("\n" + "="*70)
 print("MEMORY-SAFE TRAINING")
 print("="*70)
 print(f"Features:")
+print(f"  - float32 precision (50% memory savings vs float64)")
 print(f"  - Efficient checkpointing (avoids OOM during save)")
 print(f"  - Saves every 2 epochs")
 print(f"  - Can resume from checkpoint if interrupted")

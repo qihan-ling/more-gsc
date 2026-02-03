@@ -1284,9 +1284,15 @@ class GscNet():
             print(f"  ✓ Memory: {self.WC.nbytes / 1e9:.2f} GB")
         else:
             print("Initializing parameters on CPU with NumPy...")
+            # Get configured dtype (float32 saves 50% memory vs float64)
+            dtype_str = self.opts.get('dtype', 'float32')
+            self.numpy_dtype = np.float32 if dtype_str == 'float32' else np.float64
+            bytes_per_elem = 4 if dtype_str == 'float32' else 8
+            print(f"  Using dtype: {dtype_str} ({bytes_per_elem} bytes per element)")
+
             # Use sparse matrix for large grammars
             if self.opts['use_sparse_wc']:
-                dense_size_gb = self.num_bindings ** 2 * 8 / 1e9
+                dense_size_gb = self.num_bindings ** 2 * bytes_per_elem / 1e9
                 print(
                     f"  Large grammar detected ({self.num_bindings} bindings)")
                 print(
@@ -1296,16 +1302,16 @@ class GscNet():
                 # than lil_matrix when doing many incremental updates
                 print(f"  Using dok_matrix for memory-efficient construction...")
                 self.WC = sparse.dok_matrix(
-                    (self.num_bindings, self.num_bindings), dtype=np.float64)
+                    (self.num_bindings, self.num_bindings), dtype=self.numpy_dtype)
 
                 self.use_sparse = True
                 print("__init__ sets use_sparse to be True")
             else:
-                self.WC = np.zeros((self.num_bindings, self.num_bindings))
+                self.WC = np.zeros((self.num_bindings, self.num_bindings), dtype=self.numpy_dtype)
                 self.use_sparse = False
 
-            self.bC = np.zeros(self.num_bindings)
-            self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
+            self.bC = np.zeros(self.num_bindings, dtype=self.numpy_dtype)
+            self.estr = self.opts['init_estr'] * np.ones(self.num_bindings, dtype=self.numpy_dtype)
             # Optimizer states will be initialized in initialize() method
             # to avoid OOM during model construction
             # Initialize Adam states on CPU
@@ -1787,6 +1793,9 @@ class GscNet():
         self.opts['use_sparse_wc'] = None  # None = auto-detect
         # Threshold for auto-enabling sparse
         self.opts['sparse_wc_threshold'] = 100000
+        # Dtype for CPU/NumPy path (float32 saves 50% memory vs float64)
+        # Options: 'float32' or 'float64'
+        self.opts['dtype'] = 'float32'
 
     def _update_opts(self, opts):
         # Update opts
@@ -1986,10 +1995,12 @@ class GscNet():
 
         if is_sparse:
             print("  Initializing WC as LIL matrix for efficient construction...")
+            build_dtype = getattr(self, 'numpy_dtype', np.float32)
             self.WC = sparse.lil_matrix(
-                (self.num_bindings, self.num_bindings), dtype=np.float64)
+                (self.num_bindings, self.num_bindings), dtype=build_dtype)
         else:
-            self.WC = np.zeros((self.num_bindings, self.num_bindings))
+            build_dtype = getattr(self, 'numpy_dtype', np.float32)
+            self.WC = np.zeros((self.num_bindings, self.num_bindings), dtype=build_dtype)
 
         # t1 = time.time()
         # Binary and copy rules =========================
@@ -3513,14 +3524,16 @@ class GscNet():
 
         if self.train_opts['optimizer'] == 'adam':
             self.optim = {}
+            # Get dtype (use numpy_dtype if available, otherwise default to float32)
+            optim_dtype = getattr(self, 'numpy_dtype', np.float32)
             # Handle sparse matrices properly
             if hasattr(self, 'use_sparse') and self.use_sparse:
                 # For sparse matrices, create sparse optimizer states
                 # Use CSR format directly for efficiency (WC is already in CSR format)
                 self.optim['M_WC'] = sparse.csr_matrix(
-                    self.WC.shape, dtype=np.float64)
+                    self.WC.shape, dtype=optim_dtype)
                 self.optim['R_WC'] = sparse.csr_matrix(
-                    self.WC.shape, dtype=np.float64)
+                    self.WC.shape, dtype=optim_dtype)
             else:
                 # Dense matrices
                 self.optim['M_WC'] = np.zeros_like(self.WC)
@@ -3583,7 +3596,8 @@ class GscNet():
                 # FIXED: Build mask0 in BATCHES to avoid holding 10+ billion entries in memory
                 t_start = time.time()
                 # Process roles in batches, building and accumulating CSR matrices incrementally
-                mask0 = sparse.csr_matrix(self.WC.shape, dtype=np.float64)
+                mask_dtype = getattr(self, 'numpy_dtype', np.float32)
+                mask0 = sparse.csr_matrix(self.WC.shape, dtype=mask_dtype)
 
                 batch_size = 10  # Process 10 roles at a time
                 total_roles = len(self.hg.role_names)
@@ -3647,12 +3661,12 @@ class GscNet():
                     if row_list:
                         batch_rows = np.concatenate(row_list)
                         batch_cols = np.concatenate(col_list)
-                        batch_data = np.ones(len(batch_rows), dtype=np.float64)
+                        batch_data = np.ones(len(batch_rows), dtype=mask_dtype)
 
                         batch_coo = sparse.coo_matrix(
                             (batch_data, (batch_rows, batch_cols)),
                             shape=self.WC.shape,
-                            dtype=np.float64
+                            dtype=mask_dtype
                         )
 
                         # Add to cumulative mask (CSR addition handles duplicates)
@@ -3670,7 +3684,8 @@ class GscNet():
                 # Dense path - use vectorized construction (same logic as sparse)
                 print("    Building mask0 using vectorized construction (dense)...")
                 t_start = time.time()
-                mask0 = np.zeros(self.WC.shape)
+                mask_dtype = getattr(self, 'numpy_dtype', np.float32)
+                mask0 = np.zeros(self.WC.shape, dtype=mask_dtype)
 
                 # Collect all indices first
                 row_list = []
@@ -4040,8 +4055,9 @@ class GscNet():
                         if hasattr(self, 'use_sparse') and self.use_sparse:
                             # EFFICIENCY FIX: Build COO and append to list
                             rows, cols = np.meshgrid(idx, idx, indexing='ij')
+                            grad_dtype = getattr(self, 'numpy_dtype', np.float32)
                             mask_coo = sparse.coo_matrix(
-                                (np.ones(len(idx)**2, dtype=np.float64),
+                                (np.ones(len(idx)**2, dtype=grad_dtype),
                                  (rows.ravel(), cols.ravel())),
                                 shape=(self.num_bindings, self.num_bindings)
                             )
@@ -4124,8 +4140,9 @@ class GscNet():
                                     dWC = sum(dWC_list).tocsr()
                                 else:
                                     # No gradients accumulated
+                                    grad_dtype = getattr(self, 'numpy_dtype', np.float32)
                                     dWC = sparse.csr_matrix(
-                                        self.WC.shape, dtype=np.float64)
+                                        self.WC.shape, dtype=grad_dtype)
 
                             self.optim['M_WC'] = self.optim['beta1'] * \
                                 self.optim['M_WC'] + \
@@ -4182,8 +4199,9 @@ class GscNet():
                             if len(dWC_list) > 0:
                                 dWC = sum(dWC_list).tocsr()
                             else:
+                                grad_dtype = getattr(self, 'numpy_dtype', np.float32)
                                 dWC = sparse.csr_matrix(
-                                    self.WC.shape, dtype=np.float64)
+                                    self.WC.shape, dtype=grad_dtype)
                             if not isinstance(weight_decay, (int, float)) and hasattr(weight_decay, 'tocsr'):
                                 weight_decay = weight_decay.tocsr()
 
@@ -5109,10 +5127,11 @@ class GscNet():
                     grad_cols.append(c)
                     grad_vals.append(v)
 
+                grad_dtype = getattr(self, 'numpy_dtype', np.float32)
                 dWC = sparse.coo_matrix(
                     (grad_vals, (grad_rows, grad_cols)),
                     shape=(self.num_bindings, self.num_bindings),
-                    dtype=np.float64
+                    dtype=grad_dtype
                 )
 
                 # DIAGNOSTIC: Check how many gradient positions are NEW vs EXISTING in WC
@@ -5140,9 +5159,10 @@ class GscNet():
                     print(f"      Current WC nnz: {self.WC.nnz}")
             else:
                 # No gradients computed
+                grad_dtype = getattr(self, 'numpy_dtype', np.float32)
                 dWC = sparse.coo_matrix(
                     (self.num_bindings, self.num_bindings),
-                    dtype=np.float64
+                    dtype=grad_dtype
                 )
                 if self.epoch_num % 100 == 1 or self.epoch_num <= 5:
                     print(f"      SPARSE dWC: EMPTY (no gradients)")
@@ -5209,10 +5229,11 @@ class GscNet():
         WC_S /= float(count_S)
 
         # Use sparse zeros for sparse WC
+        avg_dtype = getattr(self, 'numpy_dtype', np.float32)
         if hasattr(self, 'use_sparse') and self.use_sparse:
-            WC_avg = sparse.dok_matrix(self.WC.shape, dtype=np.float64)
+            WC_avg = sparse.dok_matrix(self.WC.shape, dtype=avg_dtype)
         else:
-            WC_avg = np.zeros(self.WC.shape)
+            WC_avg = np.zeros(self.WC.shape, dtype=avg_dtype)
 
         # for role in self.role_names:
         #     if not self.hg.roles.is_terminal(role):
