@@ -32,6 +32,15 @@ sim = hg.get_simlist(dp=0.0)
 # ============================================================================
 USE_SPARSE = True      # True = sparse WC matrix, False = dense
 USE_COMPRESSED = True  # True = compressed encodings, False = full dimension
+
+# ============================================================================
+# PRE-FLIGHT MEMORY ESTIMATE
+# ============================================================================
+num_bindings_estimate = len(hg.filler_names) * len(hg.role_names)
+print(f"\n{'='*70}")
+print("PRE-FLIGHT MEMORY ESTIMATE (float32 dtype)")
+print(f"{'='*70}")
+print(f"  Estimated num_bindings: {num_bindings_estimate:,}")
 # ============================================================================
 
 # Network options matching paper's parameters
@@ -52,8 +61,31 @@ encodings = {
     'similarity': sim,
 }
 if USE_COMPRESSED:
-    encodings['dim_f'] = 150  # Compressed filler encoding
-    encodings['dim_r'] = 60   # Compressed role encoding
+    # ========================================================================
+    # ENCODING DIMENSION OPTIONS (with float32 dtype optimization)
+    # ========================================================================
+    # Memory comparison (C matrix per binding):
+    #   dim_f=150, dim_r=60  → 9,000 units  × 4 bytes = 36KB (50% of float64 baseline)
+    #   dim_f=175, dim_r=70  → 12,250 units × 4 bytes = 49KB (68% of float64 baseline)
+    #   dim_f=200, dim_r=80  → 16,000 units × 4 bytes = 64KB (89% of float64 baseline)
+    #   dim_f=225, dim_r=90  → 20,250 units × 4 bytes = 81KB (112% - may OOM!)
+    # 
+    # With float32, dim_f=200/dim_r=80 uses LESS memory than float64 with 150/60!
+    # ========================================================================
+    encodings['dim_f'] = 200  # Increased from 150 (float32 allows this)
+    encodings['dim_r'] = 80   # Increased from 60 (float32 allows this)
+    
+    # Print memory estimate
+    num_units = encodings['dim_f'] * encodings['dim_r']
+    c_matrix_bytes = num_bindings_estimate * num_units * 4  # float32 = 4 bytes
+    c_matrix_gb = c_matrix_bytes / 1e9
+    float64_baseline = num_bindings_estimate * 9000 * 8  # dim_f=150, dim_r=60, float64
+    savings_pct = (1 - c_matrix_bytes / float64_baseline) * 100
+    print(f"  Encoding dims: dim_f={encodings['dim_f']}, dim_r={encodings['dim_r']} → {num_units:,} units")
+    print(f"  C matrix (float32): {c_matrix_gb:.2f} GB")
+    print(f"  C + C_T total: {2*c_matrix_gb:.2f} GB")
+    print(f"  vs float64 baseline (150×60): {savings_pct:+.0f}% {'savings' if savings_pct > 0 else 'MORE'}")
+    print(f"{'='*70}\n")
 
 # Initialize network
 net = gsc.GscNet(hg=hg, encodings=encodings,
@@ -186,7 +218,7 @@ for epoch_block in range(n_epochs // 1):
         train_opts={'num_epochs': 1},
         savefilename=None,
     )
-    checkpoint_name = f'sap_checkpoint_epoch_{epoch_block:04d}.pkl'
+    checkpoint_name = f'sap_checkpoint_dtype_epoch_{epoch_block:04d}.pkl'
     save_model_efficient(net, checkpoint_name)
 print("\n" + "="*70)
 print("Training complete!")
@@ -226,7 +258,7 @@ for si, prob in enumerate(final_probs):
 # Plot Figure 11 (Training dynamics)
 # ============================================================================
 
-net = gsc.load_model('sap_1k_model_sparse_compress.pkl')
+net = gsc.load_model('ap_checkpoint_dtype_epoch_0.pkl')
 
 
 # ============================================================================
@@ -299,7 +331,8 @@ def get_word_sequence(sent):
 
 # Test parsing at different commitment levels (t ∈ {1, 2, ..., 12})
 commitment_levels = list(range(1, 13))
-num_sentences = len(net.corpus['sentence'])
+#num_sentences = len(net.corpus['sentence'])
+num_sentences = 10
 
 # Track accuracy for each sentence separately
 # parsing_accuracy_per_sent[si] will contain accuracies across all commitment levels for sentence si
@@ -372,113 +405,6 @@ plt.legend(loc='best', fontsize=10, framealpha=0.9)
 plt.grid(True, alpha=0.3)
 plt.ylim([0, 1.05])
 plt.tight_layout()
-plt.savefig('sap_1k_model_sparse_nocompres_parsing.png',
+plt.savefig('sap_1k_model_sparse_nocompres_dtype_parsing.png',
             dpi=300, bbox_inches='tight')
 # plt.show()
-
-print("\n" + "="*70)
-print("Generating treelet activation trajectories for each sentence type...")
-print("="*70)
-
-# ============================================================================
-# Plot treelet activation trajectories at roles (2,1) and (3,2)
-# for each sentence type
-# ============================================================================
-
-# Helper function to run network on a specific sentence and generate plots
-
-print("\n=== CORPUS SENTENCE ORDER ===")
-for si, sent in enumerate(net.corpus['sentence']):
-    word_seq = get_word_sequence(sent)
-    print(f"S{si}: {word_seq}")
-print("="*70)
-
-
-def plot_sentence_treelets(net, sent, sent_idx, target):
-    """Run network on specific sentence and plot treelet activations"""
-
-    # Get word sequence for display
-    word_seq = get_word_sequence(sent)
-
-    # Extract word types only (without binding info)
-    words = [bname.split('/')[0] for bname in sent]
-
-    print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
-
-    # Reset network and run on this specific sentence with trace logging
-    #np.random.seed(1024 + sent_idx)
-    net.reset(mu=net.ep, sd=0.01)
-    net.initialize_traces(trace_list='all')
-
-    # Run word by word
-    for wi, word in enumerate(words):
-        net.run_word(word, wi + 1, log_trace=True)
-
-    # Run wrapup
-    net.run_wrapup(log_trace=True)
-
-    # Create figure with 2 subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-
-    # Top panel: Role (2,1)
-    plt.sca(ax1)
-    gsc.plot_treelet_act_trace(
-        net,
-        rname='(2,1)',
-        num_treelets=4,
-        tmin=0,
-        tmax=net.t,  # Use actual time reached
-        # Adaptive downsampling
-        downsampling=max(1, int(len(net.traces['t']) / 200)),
-        suppress_pos=True,
-        add_prob=False,
-        legend_pos='upper right'
-    )
-    ax1.set_title(
-        f'S{sent_idx}: {word_seq} - Treelet Activations at Role (2,1)', fontsize=11)
-    ax1.grid(True, alpha=0.3)
-
-    # Bottom panel: Role (3,2)
-    plt.sca(ax2)
-    gsc.plot_treelet_act_trace(
-        net,
-        rname='(3,2)',
-        num_treelets=4,
-        tmin=0,
-        tmax=net.t,
-        downsampling=max(1, int(len(net.traces['t']) / 200)),
-        suppress_pos=True,
-        add_prob=False,
-        legend_pos='upper right'
-    )
-    ax2.set_title(
-        f'S{sent_idx}: {word_seq} - Treelet Activations at Role (3,2)', fontsize=11)
-    ax2.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    filename = f'sap_1k_model_sparse_nocompres_S{sent_idx}_{word_seq.replace(" ", "_")}.png'
-    plt.savefig(filename, dpi=300, bbox_inches='tight')
-    # plt.show()
-
-    return filename
-
-
-# Generate plots for each sentence in the corpus
-filenames = []
-for si, (sent, targ) in enumerate(zip(net.corpus['sentence'], net.corpus['target'])):
-    filename = plot_sentence_treelets(net, sent, si, targ)
-    filenames.append(filename)
-
-print("\n" + "="*70)
-print("Replication complete!")
-print("Figures saved as:")
-print("  - Plots from plot_train_result() (displayed interactively)")
-print("  - figure12_g1_parsing.png")
-print("\nTreelet activation trajectories for each sentence:")
-for si, filename in enumerate(filenames):
-    word_seq = get_word_sequence(net.corpus['sentence'][si])
-    marker = " <-- S1 = 'N Vi P N'" if word_seq == 'N Vi P N' else ""
-    print(f"  - {filename}{marker}")
-print("="*70)
-print(f"Finished running at {time.time()-t0:.2f}s")
-
