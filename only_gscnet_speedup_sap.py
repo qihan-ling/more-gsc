@@ -3347,6 +3347,16 @@ class GscNet():
         if self.train_opts['apply_wrapup_scale_constants']:
             self.update_scale_constants(pos=1)
 
+        # DEBUG: Show computation details
+        if hasattr(self, '_debug_wrapup_first_call') and not self._debug_wrapup_first_call:
+            pass  # Skip after first call
+        else:
+            self._debug_wrapup_first_call = False
+            integration_dur = dur / self.opts['q_rate']
+            num_steps = integration_dur / self.opts['dt_init']
+            print(
+                f"        [run_wrapup: dur={integration_dur:.1f}, steps~{num_steps:.0f}, use_runC={self.opts['use_runC']}]")
+
         if self.opts['use_runC']:
             self.runC(dur / self.opts['q_rate'],
                       log_trace=log_trace, update_q=update_q)
@@ -3804,10 +3814,14 @@ class GscNet():
             print(
                 f"INIT WC (DENSE): sum={wc_checksum:.10f}, abssum={wc_abssum:.10f}, nnz={wc_nnz}")
         print(f"INIT bC: sum={bc_checksum:.10f}, abssum={bc_abssum:.10f}")
-
+        print(f"\n{'='*70}")
+        print(
+            f"STARTING TRAINING LOOP: {self.train_opts['num_epochs']} epochs")
+        print(f"{'='*70}")
         for _ in range(self.train_opts['num_epochs']):
 
             self.epoch_num += 1
+            print(f"\n>>> EPOCH {self.epoch_num} STARTED <<<")
 
             # TIMING DIAGNOSTICS: Track time spent in each phase
             _timing = {'start': time.time()}
@@ -3845,7 +3859,13 @@ class GscNet():
             # update weights
             prob_sent_report_list = []
 
+            print(
+                f"  Initializing gradient arrays... (sparse={hasattr(self, 'use_sparse') and self.use_sparse})")
+
             if self.train_opts['parallel_parser_train']:
+                print(
+                    f"  Parallel parser training enabled - calling train_parallel_parsing()...")
+
                 dWC_parse, acc, dbC_parse = self.train_parallel_parsing()
                 # EFFICIENCY FIX: Handle sparse gradient accumulation
                 if hasattr(self, 'use_sparse') and self.use_sparse and not self.use_jax:
@@ -3857,7 +3877,11 @@ class GscNet():
                 else:
                     dWC += dWC_parse
                 dbC += dbC_parse
+            print(f"  Processing {len(prefix_list)} prefix(es)...")
+
             for pi, prefix in enumerate(prefix_list):
+                print(
+                    f"  Prefix {pi+1}/{len(prefix_list)}: {prefix}, weight={prefix_weights[pi]}")
 
                 if prefix_weights[pi] > 0:
                     if len(prefix) > 0:
@@ -3867,8 +3891,11 @@ class GscNet():
                     else:
                         scale_dWC = 1.0
                         prefix_bnames = []
+                    print(f"    Calling get_corpus_stat...")
+
                     stat_P = self.get_corpus_stat(
                         self.subset_corpus(prefix_bnames))
+                    print(f"    get_corpus_stat completed")
 
                     # TIMING: estimate_prob_inc is the main bottleneck
                     _t_prob_start = time.time()
@@ -4406,7 +4433,8 @@ class GscNet():
 
     def estimate_prob_inc(self, prefix, num_trials=40, progress=0, update_q_discrete=False):
         # NOW
-
+        print(
+            f"      >> estimate_prob_inc called: {num_trials} trials, progress={progress}")
         corpus = {}
         corpus['target'] = []
         corpus['count'] = []
@@ -4421,6 +4449,8 @@ class GscNet():
                     if (trial_id + 1) % (10 * progress) == 0:
                         print('')
 
+            if trial_id == 0:
+                print(f"      >> Starting trial 1/{num_trials}...")
             self.reset(mu=self.ep, sd=self.train_opts['init_noise_mag'])
             # self.opts['q_max'] = 15.
             # self.set_state(mu=self.ep, sd=self.train_opts['init_noise_mag'])
