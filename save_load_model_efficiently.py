@@ -32,7 +32,7 @@ def save_model_efficient(net, filename):
         'seed': net.seed if hasattr(net, 'seed') else None,
 
         # Training state
-        'hg_pcfg': net.hg.pcfg,  # PCFG string (small)
+        'hg_pcfg': net.hg.pcfg_str,  # PCFG string (small)
         'hg_root': net.hg.opts['root'],
         'hg_maxlen': net.hg.opts['max_sent_len'],
 
@@ -40,7 +40,7 @@ def save_model_efficient(net, filename):
         'encodings_config': {
             'dim_f': net.dim_f,
             'dim_r': net.dim_r,
-            'similarity_dp': net.encodings.get('dp_f', 0.0),
+            'similarity': net.encodings.get('similarity', None) if isinstance(net.encodings, dict) else None,
         },
 
         # Optimizer state if using Adam
@@ -75,21 +75,46 @@ def load_model_efficient(filename, net=None):
         print("ERROR: Must provide net object to load into")
         print(
             "Reconstruct the network first, then call load_model_efficient(filename, net)")
-        return None
+        return state  # Return state dict so user can inspect it
+
+    # Verify dimensions match
+    saved_config = state.get('encodings_config', {})
+    if saved_config:
+        if saved_config.get('dim_f') != net.dim_f:
+            print(f"  WARNING: dim_f mismatch! Saved: {saved_config.get('dim_f')}, Current: {net.dim_f}")
+        if saved_config.get('dim_r') != net.dim_r:
+            print(f"  WARNING: dim_r mismatch! Saved: {saved_config.get('dim_r')}, Current: {net.dim_r}")
 
     # Restore training state
     net.WC = state['WC']
     net.bC = state['bC']
-    net.epoch_num = state['epoch_num']
-    net.traces_train = state['traces_train']
+    net.epoch_num = state.get('epoch_num', 0)
+    
+    # Restore traces (handle missing key gracefully)
+    if 'traces_train' in state:
+        net.traces_train = state['traces_train']
+    
+    # Restore train_opts if present
+    if 'train_opts' in state and state['train_opts'] is not None:
+        # Merge with existing train_opts to preserve any new options
+        if hasattr(net, 'train_opts') and net.train_opts is not None:
+            net.train_opts.update(state['train_opts'])
+        else:
+            net.train_opts = state['train_opts']
 
     # Restore optimizer state
     if 'optim' in state and state['optim'] is not None:
         net.optim = state['optim']
 
+    # Print status
     print(f"  ✓ Checkpoint loaded")
     print(f"    Resuming from epoch {net.epoch_num}")
-    print(f"    WC nnz: {net.WC.nnz:,}")
+    
+    # Handle both sparse and dense WC
+    if hasattr(net.WC, 'nnz'):
+        print(f"    WC nnz: {net.WC.nnz:,}")
+    else:
+        print(f"    WC shape: {net.WC.shape}")
 
     return net
 
