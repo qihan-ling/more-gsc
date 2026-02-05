@@ -4,34 +4,47 @@
 #SBATCH -e gsc_parallel_%j.err     # Standard error log
 #SBATCH -N 1                       # Total number of nodes
 #SBATCH --ntasks=1                 # Number of tasks
-#SBATCH --cpus-per-task=16         # CPUs per task (for parallel workers)
-#SBATCH --mem=128G                 # Memory per node
-#SBATCH --time=48:00:00            # Time limit (48 hours)
+#SBATCH --cpus-per-task=12         # CPUs per task (for parallel workers)
+#SBATCH --mem=500G                 # Memory per node (max available)
+#SBATCH --time=120:00:00           # Time limit (5 days for full training)
 
 #SBATCH --mail-type=ALL                      # Request status by email
 #SBATCH --mail-user=qh246@cornell.edu        # Email address to send results to.
 #SBATCH -p compling
 
 # ============================================================================
-# PARALLEL GSCNET TRAINING WITH RAY
+# PARALLEL GSCNET TRAINING WITH FLOAT32 OPTIMIZATION
 # ============================================================================
-# This script runs parallel gradient aggregation training using Ray.
+# This script runs parallel gradient aggregation training.
 # Each worker computes gradients on a subset of the data, then gradients
 # are aggregated and applied by the master process.
 #
+# Memory Note (float32 via only_gscnet_speedup_sap_dtype.py):
+#   - Each worker creates a GscNet with C matrix (~30 GB in float32)
+#   - With 500GB limit: safe to run 10-12 workers
+#   - Compared to float64: ~50% memory savings per worker
+#
 # Configuration:
 #   - Workers: Adjust --cpus-per-task and NUM_WORKERS below
-#   - Memory: Each worker creates a GscNet, plan ~8GB per worker
 #   - Backend: 'ray' for cluster, 'multiprocessing' for single node
 # ============================================================================
 
 # Number of parallel workers (should be <= cpus-per-task)
-NUM_WORKERS=8
+# Memory calculation with float32 (from only_gscnet_speedup_sap_dtype.py):
+#   - C matrix per worker: ~30 GB (float32)
+#   - Master model: ~35 GB
+#   - Overhead/buffers: ~5 GB per worker
+#   - Total with 10 workers: 35 + (10 × 35) = ~385 GB
+#   - Safe limit for 500GB: 10-12 workers
+NUM_WORKERS=10
 
 # Training configuration
-EPOCHS=1000
-TRIALS=50               # Base trials per epoch
-SCALE_TRIALS=true       # If true: trials × workers (more gradient signal, same time)
+# Strategy choice:
+#   SCALE_TRIALS=false: 10x faster epochs, run more epochs (recommended for SGD)
+#   SCALE_TRIALS=true:  same speed, better gradient quality per epoch
+EPOCHS=10000            # 10x more epochs since each is 10x faster
+TRIALS=50               # Base trials per epoch (split among workers)
+SCALE_TRIALS=false      # Recommended: more frequent updates with noisy gradients
 LRATE=0.1
 CHECKPOINT_EVERY=1      # Save every epoch (set higher if disk space is limited)
 

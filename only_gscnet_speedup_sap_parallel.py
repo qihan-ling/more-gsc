@@ -35,7 +35,8 @@ from typing import List, Tuple, Dict, Any, Optional
 from scipy import sparse
 
 # Import the real GscNet - workers will use actual methods, not reimplementations
-import only_gscnet_speedup_sap as gsc
+# Use dtype version for float32 memory optimization (~50% memory savings)
+import only_gscnet_speedup_sap_dtype as gsc
 
 # Try to import Ray, fall back to multiprocessing
 try:
@@ -821,7 +822,8 @@ HOW IT WORKS:
 
 USAGE:
 ------
-    import only_gscnet_speedup_sap as gsc
+    # Use dtype version for float32 memory optimization (~50% memory savings)
+import only_gscnet_speedup_sap_dtype as gsc
     from only_gscnet_speedup_sap_parallel import ParallelTrainer
     
     # Setup (same as normal training)
@@ -851,7 +853,8 @@ if __name__ == "__main__":
     ╠══════════════════════════════════════════════════════════════════╣
     ║                                                                  ║
     ║  # Standard training setup                                       ║
-    ║  import only_gscnet_speedup_sap as gsc                          ║
+    ║  # Use dtype version for float32 memory optimization (~50% memory savings)
+import only_gscnet_speedup_sap_dtype as gsc                          ║
     ║  from only_gscnet_speedup_sap_parallel import ParallelTrainer   ║
     ║                                                                  ║
     ║  # Create and initialize network                                 ║

@@ -25,7 +25,8 @@ import time
 import os
 
 # Import GscNet and parallel trainer
-import only_gscnet_speedup_sap as gsc
+# Use dtype version for float32 memory optimization (~50% memory savings)
+import only_gscnet_speedup_sap_dtype as gsc
 from only_gscnet_speedup_sap_parallel import ParallelTrainer, train_parallel
 from save_load_model_efficiently import save_model_efficient
 
