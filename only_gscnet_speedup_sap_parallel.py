@@ -111,8 +111,9 @@ def _extract_net_config(net) -> Dict[str, Any]:
         # Equilibrium point (computed once, shared)
         'ep': net.ep,
         
-        # Precomputed mask0 (expensive to compute, share it)
-        'mask0_pickle': pickle.dumps(net.get_mask0()) if hasattr(net, 'train_opts') else None,
+        # NOTE: mask0 is NOT passed to workers - it's only needed for optimizer
+        # updates which happen on the master. Removing this saves ~132 GB per worker!
+        # 'mask0_pickle': pickle.dumps(net.get_mask0()) if hasattr(net, 'train_opts') else None,
         
         # Q-policy if exists
         'qpolicy': getattr(net, 'qpolicy', None),
@@ -205,8 +206,7 @@ def _worker_compute_gradients(
     num_bindings = worker_net.num_bindings
     num_trials = net_config['train_opts'].get('num_trials', 10)
     
-    # Deserialize mask0 (computed once by master)
-    mask0 = pickle.loads(net_config['mask0_pickle']) if net_config['mask0_pickle'] else None
+    # NOTE: mask0 is NOT needed in workers - only master uses it for optimizer updates
     
     # Get corpus for target statistics
     corpus = net_config['corpus']
