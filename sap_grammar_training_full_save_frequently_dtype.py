@@ -71,9 +71,11 @@ if USE_COMPRESSED:
     #   dim_f=225, dim_r=90  → 20,250 units × 4 bytes = 81KB (112% - may OOM!)
     # 
     # With float32, dim_f=200/dim_r=80 uses LESS memory than float64 with 150/60!
+    # NOTE: Keep same dimensions as float64 version to ensure stability first.
+    #       Increase only after confirming float32 baseline works.
     # ========================================================================
-    encodings['dim_f'] = 200  # Increased from 150 (float32 allows this)
-    encodings['dim_r'] = 80   # Increased from 60 (float32 allows this)
+    encodings['dim_f'] = 150  # Same as float64 version (50% memory savings)
+    encodings['dim_r'] = 60   # Same as float64 version (50% memory savings)
     
     # Print memory estimate
     num_units = encodings['dim_f'] * encodings['dim_r']

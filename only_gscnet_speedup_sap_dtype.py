@@ -18,9 +18,9 @@ try:
     from functools import partial
     JAX_AVAILABLE = True
     print("JAX detected - GPU acceleration enabled")
-except ImportError:
+except (ImportError, RuntimeError, Exception) as e:
     JAX_AVAILABLE = False
-    print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
+    print(f"JAX not available - running in CPU mode. ({type(e).__name__}: {e})")
 
 # ============================================================================
 # MEMORY OPTIMIZATION: Configurable precision for large grammars
@@ -4517,16 +4517,27 @@ class GscNet():
         corpus['prob_sent'] = []
         self.actC_list = []
 
+        import sys
+        _trial_start_time = time.time()
         for trial_id in range(num_trials):
 
             if progress > 0:
                 if (trial_id + 1) % progress == 0:
                     print('[%04d]' % (trial_id + 1), end='')
+                    sys.stdout.flush()
                     if (trial_id + 1) % (10 * progress) == 0:
                         print('')
 
+            # Progress output: print every 10 trials or first/last trial
             if trial_id == 0:
-                print(f"      >> Starting trial 1/{num_trials}...")
+                print(f"      >> Starting trial 1/{num_trials}...", flush=True)
+            elif (trial_id + 1) % 10 == 0 or trial_id == num_trials - 1:
+                elapsed = time.time() - _trial_start_time
+                avg_per_trial = elapsed / (trial_id + 1)
+                remaining = avg_per_trial * (num_trials - trial_id - 1)
+                print(f"      >> Trial {trial_id + 1}/{num_trials} "
+                      f"({elapsed:.1f}s elapsed, ~{remaining:.1f}s remaining)", flush=True)
+            
             self.reset(mu=self.ep, sd=self.train_opts['init_noise_mag'])
             # self.opts['q_max'] = 15.
             # self.set_state(mu=self.ep, sd=self.train_opts['init_noise_mag'])
@@ -4551,7 +4562,12 @@ class GscNet():
         corpus['target'] = np.array(corpus['target'])
         corpus['count'] = np.array(corpus['count'])
         corpus['prob_sent'] = corpus['count'] / corpus['count'].sum()
-        # print("runnign get_corpus_stat in prob_inc()")
+        
+        # Print completion summary
+        total_trial_time = time.time() - _trial_start_time
+        print(f"      >> All {num_trials} trials completed in {total_trial_time:.1f}s "
+              f"({total_trial_time/num_trials:.1f}s/trial)", flush=True)
+        
         stat = self.get_corpus_stat(corpus)
         # print(
         #     f"saved stat after get_corpus_stat in prob_inc() is of type {type(stat)}")
