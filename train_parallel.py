@@ -28,7 +28,9 @@ import os
 # Use dtype version for float32 memory optimization (~50% memory savings)
 import only_gscnet_speedup_sap_dtype as gsc
 from only_gscnet_speedup_sap_parallel import ParallelTrainer, train_parallel
-from save_load_model_efficiently import save_model_efficient
+from save_load_model_efficiently import save_model_efficient, load_model_efficient
+from scipy import sparse
+import pickle
 
 
 def parse_args():
@@ -120,8 +122,52 @@ def main():
     # =========================================================================
     if args.resume:
         print(f"\nResuming from checkpoint: {args.resume}")
-        net = gsc.load_model(args.resume)
-        print(f"Loaded model with {net.num_bindings} bindings")
+        
+        # Step 1: Load checkpoint state dict
+        with open(args.resume, 'rb') as f:
+            state = pickle.load(f)
+        print(f"  Checkpoint contains: {list(state.keys())}")
+        
+        # Step 2: Reconstruct HarmonicGrammar from saved config
+        print("  Reconstructing HarmonicGrammar...")
+        hg = gsc.HarmonicGrammar(
+            pcfg=state['hg_pcfg'],
+            root=state['hg_root'],
+            max_sent_len=state['hg_maxlen']
+        )
+        
+        # Step 3: Get encodings config
+        enc_config = state.get('encodings_config', {})
+        encodings = {}
+        if enc_config.get('similarity') is not None:
+            encodings['similarity'] = enc_config['similarity']
+        else:
+            encodings['similarity'] = hg.get_simlist(dp=0.0)
+        
+        if enc_config.get('dim_f') is not None:
+            encodings['dim_f'] = enc_config['dim_f']
+            encodings['dim_r'] = enc_config['dim_r']
+        
+        # Step 4: Network options
+        net_opts = state.get('opts', {})
+        net_opts['use_jax'] = False
+        if 'use_sparse_wc' not in net_opts and sparse.issparse(state['WC']):
+            net_opts['use_sparse_wc'] = True
+        
+        # Step 5: Create network
+        print("  Creating GscNet...")
+        seed = state.get('seed', 1024)
+        net = gsc.GscNet(hg=hg, encodings=encodings, opts=net_opts, seed=seed)
+        
+        # Step 6: Load weights and training state
+        net = load_model_efficient(args.resume, net)
+        print(f"  Loaded model with {net.num_bindings} bindings")
+        
+        # Step 7: Regenerate corpus (not saved in checkpoint)
+        print("  Regenerating corpus...")
+        net.generate_corpus(use_freq=True, nsamples=5000)
+        print(f"  Corpus sentences: {len(net.corpus['sentence'])}")
+        
     else:
         # Load grammar
         print(f"\nLoading grammar from: {args.grammar}")
