@@ -1,0 +1,198 @@
+#!/bin/bash
+#SBATCH --job-name=gsc_parallel_resume
+#SBATCH --output=gsc_parallel__resume_%j.out
+#SBATCH --error=gsc_parallel__resume_%j.err
+#SBATCH --time=72:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=200G
+
+# =============================================================================
+# PARALLEL GSCNET TRAINING - SBATCH SUBMISSION SCRIPT
+# =============================================================================
+#
+# This script runs parallel training with optimized resource allocation:
+# - 2 workers (to limit memory duplication)
+# - 8 CPUs per worker (for parallel BLAS operations)
+# - 200 GB total memory (2 workers × ~50 GB network + overhead)
+#
+# Usage:
+#   sbatch train_parallel_optimized.sub
+#
+# To monitor:
+#   squeue -u $USER
+#   tail -f gsc_parallel_*.out
+#
+# =============================================================================
+
+echo "=============================================="
+echo "GSCNET PARALLEL TRAINING"
+echo "=============================================="
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURM_NODELIST"
+echo "CPUs: $SLURM_CPUS_PER_TASK"
+echo "Memory: $SLURM_MEM_PER_NODE"
+echo "Start time: $(date)"
+echo "=============================================="
+
+# -----------------------------------------------------------------------------
+# CONFIGURATION - ADJUST THESE AS NEEDED
+# -----------------------------------------------------------------------------
+
+# Number of parallel workers (each needs ~50 GB for full GscNet)
+NUM_WORKERS=2
+
+# CPUs per worker for multi-threaded BLAS (total CPUs / num workers)
+CPUS_PER_WORKER=$((SLURM_CPUS_PER_TASK / NUM_WORKERS))
+
+# Training parameters
+EPOCHS=500
+TRIALS=50
+LEARNING_RATE=0.1
+SEED=42
+
+# Grammar file
+GRAMMAR="collapsed_filtered_sm5.grammar"
+
+# Encoding dimensions (use same as working serial version)
+DIM_F=150
+DIM_R=60
+
+# Checkpointing
+CHECKPOINT_EVERY=1
+OUTPUT_PREFIX="parallel_model"
+
+# Backend: multiprocessing (more stable for large models)
+BACKEND="multiprocessing"
+
+# Scale trials by workers? (false = faster epochs, true = more gradient signal)
+SCALE_TRIALS=false
+
+# Resume from checkpoint? (leave empty for fresh start)
+# Example: RESUME_FROM="sap_checkpoint_epoch_0002.pkl"
+RESUME_FROM="sap_checkpoint_epoch_0002.pkl"
+
+# -----------------------------------------------------------------------------
+# ENVIRONMENT SETUP
+# -----------------------------------------------------------------------------
+
+# Load conda environment
+echo ""
+echo "Setting up environment..."
+source ~/.bashrc
+conda activate reverse_order
+
+# Set working directory
+cd /home/qh246/gsc/more-gsc
+echo "Working directory: $(pwd)"
+
+# Set BLAS threading for parallel matrix operations
+export OMP_NUM_THREADS=$CPUS_PER_WORKER
+export MKL_NUM_THREADS=$CPUS_PER_WORKER
+export OPENBLAS_NUM_THREADS=$CPUS_PER_WORKER
+export VECLIB_MAXIMUM_THREADS=$CPUS_PER_WORKER
+export NUMEXPR_NUM_THREADS=$CPUS_PER_WORKER
+
+echo "BLAS threads per worker: $CPUS_PER_WORKER"
+
+# Disable JAX (not needed for CPU training)
+export JAX_PLATFORM_NAME=cpu
+
+# Python settings for multiprocessing
+export PYTHONUNBUFFERED=1
+
+# -----------------------------------------------------------------------------
+# PRINT CONFIGURATION
+# -----------------------------------------------------------------------------
+
+echo ""
+echo "=============================================="
+echo "TRAINING CONFIGURATION"
+echo "=============================================="
+echo "Workers: $NUM_WORKERS"
+echo "CPUs per worker: $CPUS_PER_WORKER"
+echo "Backend: $BACKEND"
+echo "Epochs: $EPOCHS"
+echo "Trials per epoch: $TRIALS"
+echo "Scale trials: $SCALE_TRIALS"
+echo "Learning rate: $LEARNING_RATE"
+echo "Grammar: $GRAMMAR"
+echo "Encoding: dim_f=$DIM_F, dim_r=$DIM_R"
+echo "Checkpoint every: $CHECKPOINT_EVERY epoch(s)"
+echo "Output prefix: $OUTPUT_PREFIX"
+if [ -n "$RESUME_FROM" ]; then
+    echo "Resume from: $RESUME_FROM"
+else
+    echo "Resume from: (fresh start)"
+fi
+echo "=============================================="
+
+# -----------------------------------------------------------------------------
+# RUN TRAINING
+# -----------------------------------------------------------------------------
+
+echo ""
+echo "Starting training at $(date)..."
+echo ""
+
+# Build command
+CMD="python train_parallel.py"
+CMD="$CMD --workers $NUM_WORKERS"
+CMD="$CMD --backend $BACKEND"
+CMD="$CMD --epochs $EPOCHS"
+CMD="$CMD --trials $TRIALS"
+CMD="$CMD --lrate $LEARNING_RATE"
+CMD="$CMD --seed $SEED"
+CMD="$CMD --grammar $GRAMMAR"
+CMD="$CMD --dim-f $DIM_F"
+CMD="$CMD --dim-r $DIM_R"
+CMD="$CMD --checkpoint-every $CHECKPOINT_EVERY"
+CMD="$CMD --output-prefix $OUTPUT_PREFIX"
+CMD="$CMD --sparse"
+CMD="$CMD --compressed"
+
+if [ "$SCALE_TRIALS" = true ]; then
+    CMD="$CMD --scale-trials"
+fi
+
+if [ -n "$RESUME_FROM" ]; then
+    CMD="$CMD --resume $RESUME_FROM"
+    echo "RESUMING from checkpoint: $RESUME_FROM"
+fi
+
+echo "Command: $CMD"
+echo ""
+
+# Run with time tracking
+time $CMD
+
+EXIT_CODE=$?
+
+# -----------------------------------------------------------------------------
+# COMPLETION
+# -----------------------------------------------------------------------------
+
+echo ""
+echo "=============================================="
+echo "JOB COMPLETED"
+echo "=============================================="
+echo "Exit code: $EXIT_CODE"
+echo "End time: $(date)"
+echo ""
+
+# List checkpoint files
+echo "Checkpoint files:"
+ls -la ${OUTPUT_PREFIX}*.pkl 2>/dev/null || echo "No checkpoint files found"
+echo ""
+
+# Print final stats
+if [ -f "${OUTPUT_PREFIX}_final.pkl" ]; then
+    echo "Final model saved: ${OUTPUT_PREFIX}_final.pkl"
+    ls -lh ${OUTPUT_PREFIX}_final.pkl
+fi
+
+echo "=============================================="
+
+exit $EXIT_CODE
+
