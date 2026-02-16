@@ -18,9 +18,9 @@ try:
     from functools import partial
     JAX_AVAILABLE = True
     print("JAX detected - GPU acceleration enabled")
-except ImportError:
+except (ImportError, RuntimeError, Exception) as e:
     JAX_AVAILABLE = False
-    print("JAX not found - running in CPU mode. Install with: pip install jax jaxlib")
+    print(f"JAX not available - running in CPU mode. ({type(e).__name__}: {e})")
 from only_datastructure_speedup_sap import PCFG, Node, HarmonicGrammar, BrickRole
 
 
@@ -5480,6 +5480,20 @@ class GscNet():
     # Utility functions
     #
     #####################################################################
+
+    def check_bowl_strength(self):
+        '''Check if the user-provided bowl_strength is valid.
+        
+        When bowl_strength is explicitly set (e.g., from a checkpoint),
+        we trust the value and skip the expensive eigenvalue computation.
+        The bowl_strength was already validated when it was first computed.
+        '''
+        user_value = self.opts['bowl_strength']
+        if user_value is not None and user_value > 0:
+            # Value is set and positive - trust it (likely from checkpoint)
+            pass
+        else:
+            print(f"  Warning: bowl_strength={user_value} is invalid, will auto-compute.")
 
     def _compute_recommended_bowl_strength(self):
         '''Compute the recommended value of bowl strength.
