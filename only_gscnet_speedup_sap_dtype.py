@@ -2759,8 +2759,18 @@ class GscNet():
             self.actCmat = self.vec2mat()
             self.t += num_steps * self.dt
         else:
+            _runC_start = time.time()
+            _runC_steps = 0
+            _runC_report_interval = 100  # Report every 100 steps
             while self.t < t_max:
                 self.update_stateC()
+                _runC_steps += 1
+
+                # Progress output for debugging
+                if _runC_steps % _runC_report_interval == 0:
+                    _elapsed = time.time() - _runC_start
+                    _pct = (self.t - (t_max - duration)) / duration * 100
+                    print(f"          [runC step {_runC_steps}: {_pct:.1f}% done, {_elapsed:.1f}s elapsed]", flush=True)
 
                 if update_T and (self.opts['T_decay_rate'] > 0):
                     self.update_T()
@@ -2777,6 +2787,10 @@ class GscNet():
                     self.check_convergence(tol=tol)
                     if self.converged:
                         break
+            
+            # Print completion summary
+            _total_runC_time = time.time() - _runC_start
+            print(f"          [runC complete: {_runC_steps} steps in {_total_runC_time:.1f}s]", flush=True)
 
         self.act = self.C2N()
 
