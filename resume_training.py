@@ -23,6 +23,8 @@ def parse_args():
                         help='Output filename prefix')
     parser.add_argument('--checkpoint-every', type=int, default=1,
                         help='Save checkpoint every N epochs (default: 1)')
+    parser.add_argument('--corpus-samples', type=int, default=5000,
+                        help='Number of corpus samples to generate (default: 5000)')
     return parser.parse_args()
 
 
@@ -92,7 +94,28 @@ def main():
     # Step 3: Load weights and training state into network
     # =========================================================================
     print("\nLoading weights and training state...")
-    net = load_model_efficient(args.checkpoint, net)
+    
+    # Use the already-loaded state dict instead of loading again
+    net.WC = state['WC']
+    net.bC = state['bC']
+    net.epoch_num = state.get('epoch_num', 0)
+    if 'traces_train' in state:
+        net.traces_train = state['traces_train']
+    if 'train_opts' in state and state['train_opts'] is not None:
+        net.train_opts = state['train_opts']
+    if 'optim' in state and state['optim'] is not None:
+        net.optim = state['optim']
+    
+    print(f"  ✓ Loaded weights from checkpoint")
+    print(f"    Resuming from epoch {net.epoch_num}")
+    if hasattr(net.WC, 'nnz'):
+        print(f"    WC nnz: {net.WC.nnz:,}")
+    
+    # Free the state dict to release memory
+    del state
+    import gc
+    gc.collect()
+    print(f"  ✓ Freed checkpoint memory")
     
     print(f"  num_bindings: {net.num_bindings}")
     print(f"  use_sparse: {getattr(net, 'use_sparse', False)}")
@@ -110,8 +133,9 @@ def main():
     # =========================================================================
     # Step 4: Regenerate corpus (not saved in checkpoint to save space)
     # =========================================================================
-    print("\nRegenerating corpus...")
-    net.generate_corpus(use_freq=True, nsamples=5000)
+    print(f"\nRegenerating corpus with {args.corpus_samples} samples...")
+    print(f"  (Use --corpus-samples to adjust for memory constraints)")
+    net.generate_corpus(use_freq=True, nsamples=args.corpus_samples)
     print(f"  Corpus sentences: {len(net.corpus['sentence'])}")
     
     # =========================================================================

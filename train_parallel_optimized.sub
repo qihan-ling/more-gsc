@@ -69,9 +69,13 @@ BACKEND="multiprocessing"
 # Scale trials by workers? (false = faster epochs, true = more gradient signal)
 SCALE_TRIALS=false
 
+# Optimizer: 'sgd' saves ~264 GB vs 'adam' (no momentum/RMSprop states)
+# For grammars with 11B+ mask0 entries, MUST use 'sgd' to fit in 500GB
+OPTIMIZER="sgd"
+
 # Resume from checkpoint? (leave empty for fresh start)
 # Example: RESUME_FROM="sap_checkpoint_epoch_0002.pkl"
-RESUME_FROM="sap_checkpoint_epoch_0002.pkl"
+RESUME_FROM=""
 
 # -----------------------------------------------------------------------------
 # ENVIRONMENT SETUP
@@ -151,6 +155,7 @@ CMD="$CMD --checkpoint-every $CHECKPOINT_EVERY"
 CMD="$CMD --output-prefix $OUTPUT_PREFIX"
 CMD="$CMD --sparse"
 CMD="$CMD --compressed"
+CMD="$CMD --optimizer $OPTIMIZER"
 
 if [ "$SCALE_TRIALS" = true ]; then
     CMD="$CMD --scale-trials"

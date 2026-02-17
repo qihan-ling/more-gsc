@@ -54,6 +54,9 @@ def parse_args():
                         help='Scale trials by num_workers (trials × workers) for more gradient signal')
     parser.add_argument('--lrate', type=float, default=0.1,
                         help='Learning rate (default: 0.1)')
+    parser.add_argument('--optimizer', type=str, default='sgd',
+                        choices=['sgd', 'adam'],
+                        help='Optimizer: sgd (memory efficient) or adam (default: sgd)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed (default: 42)')
     
@@ -240,7 +243,7 @@ def main():
         'report_cycle': 10,
         'init_noise_mag': 0.02,
         'average_weight': False,
-        'optimizer': 'adam',
+        'optimizer': args.optimizer,  # 'sgd' saves ~264 GB vs 'adam' (no M_WC, R_WC)
         'update_w': True,
         'update_b': False,
         'update_gram_only': False,
