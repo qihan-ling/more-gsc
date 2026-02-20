@@ -23,14 +23,15 @@ import argparse
 import numpy as np
 import time
 import os
+import gc
+import pickle
+from scipy import sparse
 
 # Import GscNet and parallel trainer
 # Use dtype version for float32 memory optimization (~50% memory savings)
 import only_gscnet_speedup_sap_dtype as gsc
 from only_gscnet_speedup_sap_parallel import ParallelTrainer, train_parallel
 from save_load_model_efficiently import save_model_efficient, load_model_efficient
-from scipy import sparse
-import pickle
 
 
 def parse_args():
@@ -157,13 +158,28 @@ def main():
         if 'use_sparse_wc' not in net_opts and sparse.issparse(state['WC']):
             net_opts['use_sparse_wc'] = True
         
-        # Step 5: Create network
-        print("  Creating GscNet...")
+        # Step 5: Create network with pre-loaded WC (skips _build_model!)
+        # MEMORY OPTIMIZATION: Pass WC/bC directly to avoid building duplicate WC
+        print("  Creating GscNet with preload_wc (skips _build_model)...")
         seed = state.get('seed', 1024)
-        net = gsc.GscNet(hg=hg, encodings=encodings, opts=net_opts, seed=seed)
+        preload_wc = (state['WC'], state['bC'])
+        net = gsc.GscNet(hg=hg, encodings=encodings, opts=net_opts, seed=seed,
+                         preload_wc=preload_wc)
         
-        # Step 6: Load weights and training state
-        net = load_model_efficient(args.resume, net)
+        # Step 6: Load remaining training state
+        net.epoch_num = state.get('epoch_num', 0)
+        if 'traces_train' in state:
+            net.traces_train = state['traces_train']
+        if 'train_opts' in state and state['train_opts'] is not None:
+            net.train_opts = state['train_opts']
+        if 'optim' in state and state['optim'] is not None:
+            net.optim = state['optim']
+        
+        # Free checkpoint memory
+        del preload_wc
+        del state
+        gc.collect()
+        
         print(f"  Loaded model with {net.num_bindings} bindings")
         
         # Step 7: Regenerate corpus (not saved in checkpoint)
