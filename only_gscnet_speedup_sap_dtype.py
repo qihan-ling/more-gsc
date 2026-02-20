@@ -2955,11 +2955,15 @@ class GscNet():
             self.actC = self.actC + self.dt * gradC
         else:
             # NumPy version: on CPU
+            # Ensure hgrad is float32 to avoid expensive type promotion
+            if hgrad.dtype != DTYPE_STORAGE:
+                hgrad = hgrad.astype(DTYPE_STORAGE)
             temp = self.C_T.dot(hgrad)
             gradC = self.C.dot(temp)
             gradC = self.scale_constants * gradC
+            dt_f32 = DTYPE_STORAGE(self.dt)
             self.t += self.dt
-            self.actC = self.actC + self.dt * gradC
+            self.actC = self.actC + dt_f32 * gradC
 
         # Add noise
         self.add_noiseC()
@@ -3003,7 +3007,8 @@ class GscNet():
                 self.bowl_center = jnp.array(
                     self.opts['bowl_center'], dtype=jnp.float32)
             else:
-                self.bowl_center = self.opts['bowl_center']
+                # Ensure bowl_center is DTYPE_STORAGE to avoid type promotion
+                self.bowl_center = np.asarray(self.opts['bowl_center'], dtype=DTYPE_STORAGE)
 
         if self.opts['bowl_strength'] is None:
             self.opts['bowl_strength'] = (
@@ -3078,7 +3083,8 @@ class GscNet():
                     self.scale_constants_q = jnp.ones(
                         self.num_bindings, dtype=jnp.float32)
                 else:
-                    self.scale_constants = weights
+                    # Ensure scale_constants is DTYPE_STORAGE to avoid type promotion
+                    self.scale_constants = np.asarray(weights, dtype=DTYPE_STORAGE)
                     self.scale_constants_q = np.ones(self.num_bindings, dtype=DTYPE_STORAGE)
 
         else:
@@ -4542,15 +4548,15 @@ class GscNet():
                     if (trial_id + 1) % (10 * progress) == 0:
                         print('')
 
-            # Progress output: print every 10 trials or first/last trial
+            # Progress output: print EVERY trial for large grammars
+            elapsed = time.time() - _trial_start_time
             if trial_id == 0:
                 print(f"      >> Starting trial 1/{num_trials}...", flush=True)
-            elif (trial_id + 1) % 10 == 0 or trial_id == num_trials - 1:
-                elapsed = time.time() - _trial_start_time
+            else:
                 avg_per_trial = elapsed / (trial_id + 1)
                 remaining = avg_per_trial * (num_trials - trial_id - 1)
                 print(f"      >> Trial {trial_id + 1}/{num_trials} "
-                      f"({elapsed:.1f}s elapsed, ~{remaining:.1f}s remaining)", flush=True)
+                      f"({elapsed:.1f}s elapsed, ~{remaining:.0f}s = {remaining/60:.1f}min remaining)", flush=True)
             
             self.reset(mu=self.ep, sd=self.train_opts['init_noise_mag'])
             # self.opts['q_max'] = 15.
@@ -5737,15 +5743,20 @@ class GscNet():
             print(
                 f"    HGradC DEBUG: WC.dot(actC) sum={wc_result.sum():.6f}, max={wc_result.max():.6f}")
             print(f"    HGradC DEBUG: hgrad_g sum={hgrad_g.sum():.6f}")
-        hgrad_b = self.opts['bowl_strength'] * \
-            (self.opts['bowl_center'] - actC)
-        hgrad_q0 = -2 * self.extend_rvec(rvec=q) * \
-            actC * (1 - actC) * (1 - 2 * actC)
+        
+        # CRITICAL: Cast scalars to DTYPE_STORAGE to prevent float64 promotion
+        # Without this, float64 scalars cause expensive float32→float64→float32 conversions
+        bowl_strength = DTYPE_STORAGE(self.opts['bowl_strength'])
+        m_val = DTYPE_STORAGE(self.opts['m'])
+        
+        hgrad_b = bowl_strength * (self.opts['bowl_center'] - actC)
+        hgrad_q0 = DTYPE_STORAGE(-2) * self.extend_rvec(rvec=q) * \
+            actC * (DTYPE_STORAGE(1) - actC) * (DTYPE_STORAGE(1) - DTYPE_STORAGE(2) * actC)
         if self.use_jax:
             ssq = jnp.sum(actCmat ** 2, axis=0)
         else:
             ssq = np.sum(actCmat ** 2, axis=0)
-        hgrad_q1 = -4 * self.opts['m'] * actC * self.extend_rvec(rvec=ssq - 1)
+        hgrad_q1 = DTYPE_STORAGE(-4) * m_val * actC * self.extend_rvec(rvec=ssq - DTYPE_STORAGE(1))
         return (hgrad_g + hgrad_b + hgrad_q0 + hgrad_q1)
  #####################################
  # PLOT
