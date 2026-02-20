@@ -1217,8 +1217,22 @@ if JAX_AVAILABLE:
 class GscNet():
     # NOTE: CHECK method backup_parametres()
 
-    def __init__(self, hg=None, encodings=None, opts=None, qpolicy=None, seed=None):
-
+    def __init__(self, hg=None, encodings=None, opts=None, qpolicy=None, seed=None, 
+                 skip_build_model=False, preload_wc=None):
+        """
+        Initialize GscNet.
+        
+        Args:
+            hg: HarmonicGrammar object
+            encodings: Encoding configuration dict
+            opts: Network options dict
+            qpolicy: Q policy array
+            seed: Random seed
+            skip_build_model: If True, skip _build_model() which constructs WC from rules.
+                             Used when resuming from checkpoint where WC is loaded separately.
+            preload_wc: Optional pre-loaded (WC, bC) tuple to use instead of building.
+                       If provided, skips _build_model() and uses these directly.
+        """
         if seed is not None:
             np.random.seed(seed)
             state = np.random.get_state()
@@ -1339,7 +1353,30 @@ class GscNet():
         # self.WC = np.zeros((self.num_bindings, self.num_bindings))
         # self.bC = np.zeros(self.num_bindings)
         # self.estr = self.opts['init_estr'] * np.ones(self.num_bindings)
-        if hg is not None:
+        
+        # Handle WC initialization based on mode
+        if preload_wc is not None:
+            # Use pre-loaded WC and bC (from checkpoint) - skips expensive _build_model()
+            print("Using pre-loaded WC and bC (skipping _build_model)")
+            self.WC, self.bC = preload_wc
+            self.estr = self.opts['init_estr'] * np.ones(self.num_bindings, dtype=self.bC.dtype)
+            self.use_sparse = hasattr(self.WC, 'nnz')  # sparse matrices have .nnz
+            print(f"  WC loaded: {self.WC.shape}, sparse={self.use_sparse}")
+            if self.use_sparse:
+                print(f"  WC nnz: {self.WC.nnz:,}")
+        elif skip_build_model:
+            # Create minimal placeholders - WC will be loaded from checkpoint later
+            print("Skipping _build_model (WC will be loaded from checkpoint)")
+            if self.opts['use_sparse_wc']:
+                import scipy.sparse as sp
+                self.WC = sp.csr_matrix((self.num_bindings, self.num_bindings), dtype=np.float64)
+                self.use_sparse = True
+            else:
+                self.WC = np.zeros((self.num_bindings, self.num_bindings), dtype=np.float64)
+                self.use_sparse = False
+            self.bC = np.zeros(self.num_bindings, dtype=np.float64)
+            self.estr = self.opts['init_estr'] * np.ones(self.num_bindings, dtype=np.float64)
+        elif hg is not None:
             print("DEBUG: _build_model starts")
             self._build_model()
             print("DEBUG: _adjust_default_param_vals starts")

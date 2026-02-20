@@ -85,19 +85,27 @@ def main():
         if sparse.issparse(state['WC']):
             net_opts['use_sparse_wc'] = True
     
-    # Create network
+    # =========================================================================
+    # MEMORY OPTIMIZATION: Pass WC/bC directly to constructor via preload_wc
+    # This skips _build_model() which would create a duplicate WC from scratch
+    # =========================================================================
+    print("\n  Using preload_wc to skip WC construction (saves ~50GB peak memory)")
+    
+    # Extract WC/bC for preloading
+    preload_wc = (state['WC'], state['bC'])
+    
+    # Create network with pre-loaded WC/bC (skips _build_model!)
     seed = state.get('seed', 1024)
-    net = gsc.GscNet(hg=hg, encodings=encodings, opts=net_opts, seed=seed)
+    net = gsc.GscNet(hg=hg, encodings=encodings, opts=net_opts, seed=seed,
+                     preload_wc=preload_wc)
     print(f"  GscNet created: {net.num_bindings} bindings")
     
     # =========================================================================
-    # Step 3: Load weights and training state into network
+    # Step 3: Load remaining training state into network
     # =========================================================================
-    print("\nLoading weights and training state...")
+    print("\nLoading remaining training state...")
     
-    # Use the already-loaded state dict instead of loading again
-    net.WC = state['WC']
-    net.bC = state['bC']
+    # WC and bC are already set via preload_wc, load other state
     net.epoch_num = state.get('epoch_num', 0)
     if 'traces_train' in state:
         net.traces_train = state['traces_train']
@@ -106,12 +114,13 @@ def main():
     if 'optim' in state and state['optim'] is not None:
         net.optim = state['optim']
     
-    print(f"  ✓ Loaded weights from checkpoint")
+    print(f"  ✓ Loaded training state from checkpoint")
     print(f"    Resuming from epoch {net.epoch_num}")
     if hasattr(net.WC, 'nnz'):
         print(f"    WC nnz: {net.WC.nnz:,}")
     
     # Free the state dict to release memory
+    del preload_wc  # Don't delete WC/bC since net holds references to them
     del state
     import gc
     gc.collect()
