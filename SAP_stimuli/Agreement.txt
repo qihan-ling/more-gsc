@@ -1,0 +1,9 @@
+NP -> JJ NN
+NP -> DT NN
+NP -> DT NNS
+VP -> VBZ NP
+VP -> VBZ 
+S -> NP VP
+SBAR -> IN S
+SBAR -> SBAR ,
+S -> SBAR S

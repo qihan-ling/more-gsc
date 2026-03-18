@@ -1,0 +1,8 @@
+S -> NP VP
+NP -> NP SBAR
+NP -> DT NP
+NP -> DT NN
+WHNP -> WP
+PP -> IN NP
+VP -> VBD PP
+SBAR -> WHNP VP
