@@ -155,10 +155,12 @@ class PCFG():
             rule_dict = {}
             LHS, RHS = rule.split('->')
             prob, LHS = [term for term in LHS.strip().split(' ') if term != '']
-            RHS = RHS.strip().split(' ')
+            RHS = [t for t in RHS.strip().split(' ') if t != '']
             rule_dict['m'] = LHS
             for ti, term in enumerate(RHS):
                 rule_dict['d' + str(ti+1)] = term
+            if 'd2' not in rule_dict:
+                rule_dict['d2'] = None
             rule_dict['p'] = float(prob)
             rules_new.append(rule_dict)
 

@@ -209,6 +209,7 @@ print("=" * 70)
 TREELET_SENTENCES = [
     'NNP VBD IN DT NN IN DT NNS WP VBZ JJ',
     'NNP VBD IN DT NNS IN DT NN WP VBZ JJ',
+    'NNP VBD IN DT NN IN DT NN WP VBZ JJ',
 ]
 TREELET_ROLES = ['(1,5)', '(1,8)'] # (1, 5) checks if it's NNS or NN, (1, 8) checks if it's NNS or NN
 NUM_TREELETS = 10
