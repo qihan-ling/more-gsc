@@ -32,7 +32,7 @@ print("Loaded PCFG:")
 print(pcfg_str)
 
 ROOT = 'S'
-MAXLEN = 9
+MAXLEN = 11
 
 # ============================================================================
 # Initialize network
@@ -193,7 +193,7 @@ plt.tight_layout()
 plt.savefig(f'{SAVE_PREFIX}_parsing.png', dpi=300, bbox_inches='tight')
 
 # ============================================================================
-# Treelet activation trajectories (first 2 sentences)
+# Treelet activation trajectories
 # ============================================================================
 
 print("\n" + "=" * 70)
@@ -205,12 +205,30 @@ for si, sent in enumerate(net.corpus['sentence']):
     print(f"S{si}: {get_word_sequence(sent)}")
 print("=" * 70)
 
-TREELET_ROLES = ['(2,1)', '(3,2)']
+
+TREELET_SENTENCES = [
+    'NNP VBD IN DT NN IN DT NNS WP VBZ JJ',
+    'NNP VBD IN DT NNS IN DT NN WP VBZ JJ',
+]
+TREELET_ROLES = ['(1,5)', '(1,8)'] # (1, 5) checks if it's NNS or NN, (1, 8) checks if it's NNS or NN
 NUM_TREELETS = 10
-treelet_indices = list(range(min(2, num_sentences)))
+
+corpus_word_seqs = {
+    si: get_word_sequence(sent)
+    for si, sent in enumerate(net.corpus['sentence'])
+}
+treelet_indices = []
+for target_seq in TREELET_SENTENCES:
+    found = [si for si, ws in corpus_word_seqs.items() if ws == target_seq]
+    if found:
+        treelet_indices.append(found[0])
+        print(f"  Found '{target_seq}' as S{found[0]}")
+    else:
+        print(f"  WARNING: '{target_seq}' not found in corpus!")
 
 
 def plot_sentence_treelets(net, sent, sent_idx):
+    """Run network on a sentence and plot treelet activations at key roles."""
     word_seq = get_word_sequence(sent)
     words = [bname.split('/')[0] for bname in sent]
     print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
