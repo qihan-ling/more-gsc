@@ -1,9 +1,16 @@
-NP -> JJ NN
-NP -> DT NN
-NP -> DT NNS
-VP -> VBZ NP
-VP -> VBZ 
-S -> NP VP
+NP_sg -> DT NN
+NP_sg -> JJ NN
+NP_pl -> DT NNS
+VP_sg -> VBZ NP_sg
+VP_sg -> VBZ NP_pl
+VP_sg -> VBZ
+VP_pl -> VBP NP_sg
+VP_pl -> VBP NP_pl
+VP_pl -> VBP
+S -> NP_sg VP_sg
+S -> NP_sg VP_pl
+S -> NP_pl VP_sg
+S -> NP_pl VP_pl
+S -> SBAR S
 SBAR -> IN S
 SBAR -> SBAR ,
-S -> SBAR S
