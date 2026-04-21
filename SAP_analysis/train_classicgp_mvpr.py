@@ -56,7 +56,39 @@ net_opts = {
 
 net = gsc.GscNet(hg=hg, encodings={'similarity': sim},
                  opts=net_opts, seed=1024)
-net.generate_corpus(use_freq=True)
+
+REQUIRED_SENTENCES = {
+    'DT NN WP VBD VBN DT NN VBD JJ NN',
+    'DT NN VBN DT NN VBD JJ NN',
+}
+NSAMPLES = 50000
+MAX_EXTRA_SAMPLES = 10_000_000
+
+net.generate_corpus(nsamples=NSAMPLES, use_freq=True)
+
+get_ws = lambda s: ' '.join(b.split('/')[0] for b in s)
+missing = REQUIRED_SENTENCES - {get_ws(s) for s in net.corpus['sentence']}
+if missing:
+    print(f"Sampling for {len(missing)} required sentences...")
+    for extra in range(MAX_EXTRA_SAMPLES):
+        sent, target, p = net.generate_sentence()
+        ws = get_ws(sent)
+        if ws in missing:
+            net.corpus['sentence'].append(sent)
+            net.corpus['target'] = np.vstack([net.corpus['target'], [target]])
+            net.corpus['count'] = np.append(net.corpus['count'], 1)
+            missing.discard(ws)
+            print(f"  Found '{ws}' after {extra+1} extra samples")
+            if not missing:
+                break
+    if missing:
+        print(f"  WARNING: Still missing after {MAX_EXTRA_SAMPLES} extra samples: {missing}")
+    net.corpus['prob_sent'] = net.corpus['count'] / net.corpus['count'].sum()
+    idx = np.argsort(net.corpus['prob_sent'])[::-1]
+    net.corpus['sentence'] = [net.corpus['sentence'][i] for i in idx]
+    net.corpus['target'] = net.corpus['target'][idx]
+    net.corpus['count'] = net.corpus['count'][idx]
+    net.corpus['prob_sent'] = net.corpus['prob_sent'][idx]
 
 print("\n" + "=" * 70)
 print("Target sentence probabilities:")

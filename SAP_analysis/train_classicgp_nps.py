@@ -58,25 +58,39 @@ net_opts = {
 
 net = gsc.GscNet(hg=hg, encodings={'similarity': sim},
                  opts=net_opts, seed=1024)
-net.generate_corpus(use_freq=True)
 
-REQUIRED_SENTENCES = [
+REQUIRED_SENTENCES = {
     'DT NN VBD IN DT NN VBD JJ NN',
     'DT NN VBD DT NN VBD JJ NN',
-]
-corpus_seqs = [
-    ' '.join(bname.split('/')[0] for bname in sent)
-    for sent in net.corpus['sentence']
-]
-for req in REQUIRED_SENTENCES:
-    if req not in corpus_seqs:
-        print(f"\nERROR: Required sentence '{req}' not found in corpus.")
-        print(f"Corpus contains {len(corpus_seqs)} sentences:")
-        for i, s in enumerate(corpus_seqs):
-            print(f"  S{i}: {s}")
-        raise ValueError(
-            f"Required sentence '{req}' missing from generated corpus. "
-            f"Check grammar rules and MAXLEN={MAXLEN}.")
+}
+NSAMPLES = 50000
+MAX_EXTRA_SAMPLES = 10_000_000
+
+net.generate_corpus(nsamples=NSAMPLES, use_freq=True)
+
+get_ws = lambda s: ' '.join(b.split('/')[0] for b in s)
+missing = REQUIRED_SENTENCES - {get_ws(s) for s in net.corpus['sentence']}
+if missing:
+    print(f"Sampling for {len(missing)} required sentences...")
+    for extra in range(MAX_EXTRA_SAMPLES):
+        sent, target, p = net.generate_sentence()
+        ws = get_ws(sent)
+        if ws in missing:
+            net.corpus['sentence'].append(sent)
+            net.corpus['target'] = np.vstack([net.corpus['target'], [target]])
+            net.corpus['count'] = np.append(net.corpus['count'], 1)
+            missing.discard(ws)
+            print(f"  Found '{ws}' after {extra+1} extra samples")
+            if not missing:
+                break
+    if missing:
+        print(f"  WARNING: Still missing after {MAX_EXTRA_SAMPLES} extra samples: {missing}")
+    net.corpus['prob_sent'] = net.corpus['count'] / net.corpus['count'].sum()
+    idx = np.argsort(net.corpus['prob_sent'])[::-1]
+    net.corpus['sentence'] = [net.corpus['sentence'][i] for i in idx]
+    net.corpus['target'] = net.corpus['target'][idx]
+    net.corpus['count'] = net.corpus['count'][idx]
+    net.corpus['prob_sent'] = net.corpus['prob_sent'][idx]
 
 print("\n" + "=" * 70)
 print("Target sentence probabilities:")

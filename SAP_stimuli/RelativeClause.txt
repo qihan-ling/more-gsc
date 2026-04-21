@@ -2,7 +2,12 @@ S -> NP VP
 NP -> NP SBAR
 NP -> DT NP
 NP -> DT NN
+NP -> DT NNS
+NP -> NN NN
 WHNP -> WP
 PP -> IN NP
 VP -> VBD PP
+VP -> VBD
+VP -> VBD NP
 SBAR -> WHNP VP
+SBAR -> WHNP S

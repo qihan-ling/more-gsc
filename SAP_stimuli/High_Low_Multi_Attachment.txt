@@ -3,8 +3,11 @@ PP -> IN NP
 NP -> DT NN
 NP -> DT NNS
 NP -> NP SBAR
+NP -> NP PP
 VP -> VBD PP
 NP -> NNP
 SBAR -> WHNP VP
 VP -> VBZ ADJP
+VP -> VBP ADJP
 ADJP -> JJ
+WHNP -> WP

@@ -4,8 +4,8 @@
 0.277252 VP_sg -> VBZ NP_sg
 0.150375 VP_sg -> VBZ NP_pl
 0.572373 VP_sg -> VBZ
-0.264545 VP_pl -> VBP NP_sg
-0.155303 VP_pl -> VBP NP_pl
+0.155303 VP_pl -> VBP NP_sg
+0.264545 VP_pl -> VBP NP_pl
 0.580152 VP_pl -> VBP
 0.425094 S -> NP_sg VP_sg
 0.033159 S -> NP_sg VP_pl
