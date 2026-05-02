@@ -130,157 +130,157 @@ gsc.plot_train_result(
 # Parsing tests (random 10 sentences)
 # ============================================================================
 
-print("\n" + "=" * 70)
-print("Testing parsing accuracy...")
-print("=" * 70)
+# print("\n" + "=" * 70)
+# print("Testing parsing accuracy...")
+# print("=" * 70)
 
 
-def get_word_sequence(sent):
-    return ' '.join([bname.split('/')[0] for bname in sent])
+# def get_word_sequence(sent):
+#     return ' '.join([bname.split('/')[0] for bname in sent])
 
 
-num_sentences = len(net.corpus['sentence'])
-N_PARSE_SAMPLE = min(10, num_sentences)
-np.random.seed(1024)
-parse_sample_indices = sorted(
-    np.random.choice(num_sentences, size=N_PARSE_SAMPLE, replace=False))
-print(f"Randomly selected {N_PARSE_SAMPLE} sentences for parsing test:")
-for si in parse_sample_indices:
-    print(f"  S{si}: {get_word_sequence(net.corpus['sentence'][si])}")
+# num_sentences = len(net.corpus['sentence'])
+# N_PARSE_SAMPLE = min(10, num_sentences)
+# np.random.seed(1024)
+# parse_sample_indices = sorted(
+#     np.random.choice(num_sentences, size=N_PARSE_SAMPLE, replace=False))
+# print(f"Randomly selected {N_PARSE_SAMPLE} sentences for parsing test:")
+# for si in parse_sample_indices:
+#     print(f"  S{si}: {get_word_sequence(net.corpus['sentence'][si])}")
 
-commitment_levels = list(range(1, 13))
-parsing_accuracy_per_sent = {si: [] for si in parse_sample_indices}
+# commitment_levels = list(range(1, 13))
+# parsing_accuracy_per_sent = {si: [] for si in parse_sample_indices}
 
-for t in commitment_levels:
-    max_sent_len = net.hg.opts['max_sent_len']
-    dq = np.ones(max_sent_len) * (float(t) / max_sent_len)
+# for t in commitment_levels:
+#     max_sent_len = net.hg.opts['max_sent_len']
+#     dq = np.ones(max_sent_len) * (float(t) / max_sent_len)
 
-    try:
-        np.random.seed(1024 + t)
-        parse_results = gsc.test_parse_inc(
-            net, dq=dq, num_trials=10, estr=2, estr_null=2, disp=False)
+#     try:
+#         np.random.seed(1024 + t)
+#         parse_results = gsc.test_parse_inc(
+#             net, dq=dq, num_trials=10, estr=2, estr_null=2, disp=False)
 
-        for si in parse_sample_indices:
-            acc_si = parse_results[si]['acc'] if si in parse_results else 0.0
-            parsing_accuracy_per_sent[si].append(acc_si)
+#         for si in parse_sample_indices:
+#             acc_si = parse_results[si]['acc'] if si in parse_results else 0.0
+#             parsing_accuracy_per_sent[si].append(acc_si)
 
-        accs = [parse_results[si]['acc']
-                for si in parse_sample_indices if si in parse_results]
-        acc_overall = np.mean(accs) if accs else 0.0
+#         accs = [parse_results[si]['acc']
+#                 for si in parse_sample_indices if si in parse_results]
+#         acc_overall = np.mean(accs) if accs else 0.0
 
-    except Exception as e:
-        print(f"  Warning: Parsing test failed at t={t}: {e}")
-        for si in parse_sample_indices:
-            parsing_accuracy_per_sent[si].append(0.0)
-        acc_overall = 0.0
+#     except Exception as e:
+#         print(f"  Warning: Parsing test failed at t={t}: {e}")
+#         for si in parse_sample_indices:
+#             parsing_accuracy_per_sent[si].append(0.0)
+#         acc_overall = 0.0
 
-    print(f"Commitment t={t:2d}: Overall accuracy = {acc_overall:.3f}")
+#     print(f"Commitment t={t:2d}: Overall accuracy = {acc_overall:.3f}")
 
-plt.figure(figsize=(10, 6))
-cmap = plt.cm.tab20
-for idx, si in enumerate(parse_sample_indices):
-    word_seq = get_word_sequence(net.corpus['sentence'][si])
-    plt.plot(commitment_levels, parsing_accuracy_per_sent[si],
-             color=cmap(idx / max(N_PARSE_SAMPLE, 1)),
-             linewidth=2, label=f'S{si}: {word_seq}')
+# plt.figure(figsize=(10, 6))
+# cmap = plt.cm.tab20
+# for idx, si in enumerate(parse_sample_indices):
+#     word_seq = get_word_sequence(net.corpus['sentence'][si])
+#     plt.plot(commitment_levels, parsing_accuracy_per_sent[si],
+#              color=cmap(idx / max(N_PARSE_SAMPLE, 1)),
+#              linewidth=2, label=f'S{si}: {word_seq}')
 
-plt.xlabel('Commitment Level (t)', fontsize=12)
-plt.ylabel('Parsing Accuracy', fontsize=12)
-plt.title('ClassicGP_MVPR Parsing Accuracy by Sentence Type', fontsize=14)
-plt.legend(loc='best', fontsize=8, framealpha=0.9, ncol=2)
-plt.grid(True, alpha=0.3)
-plt.ylim([0, 1.05])
-plt.tight_layout()
-plt.savefig(f'{SAVE_PREFIX}_parsing.png', dpi=300, bbox_inches='tight')
+# plt.xlabel('Commitment Level (t)', fontsize=12)
+# plt.ylabel('Parsing Accuracy', fontsize=12)
+# plt.title('ClassicGP_MVPR Parsing Accuracy by Sentence Type', fontsize=14)
+# plt.legend(loc='best', fontsize=8, framealpha=0.9, ncol=2)
+# plt.grid(True, alpha=0.3)
+# plt.ylim([0, 1.05])
+# plt.tight_layout()
+# plt.savefig(f'{SAVE_PREFIX}_parsing.png', dpi=300, bbox_inches='tight')
 
-# ============================================================================
-# Treelet activation trajectories
-# ============================================================================
+# # ============================================================================
+# # Treelet activation trajectories
+# # ============================================================================
 
-print("\n" + "=" * 70)
-print("Generating treelet activation trajectories...")
-print("=" * 70)
+# print("\n" + "=" * 70)
+# print("Generating treelet activation trajectories...")
+# print("=" * 70)
 
-print("\n=== CORPUS SENTENCE ORDER ===")
-for si, sent in enumerate(net.corpus['sentence']):
-    print(f"S{si}: {get_word_sequence(sent)}")
-print("=" * 70)
-
-
-TREELET_SENTENCES = [
-    'DT NN WP VBD VBN DT NN VBD JJ NN',
-    'DT NN VBN DT NN VBD JJ NN',
-]
-TREELET_ROLES = ['(1,3)', '(8,2)'] # (1,3) checks if WHNP is present for treelet1, (8,2) checks if SBAR is present for treelet1
-NUM_TREELETS = 10
-
-corpus_word_seqs = {
-    si: get_word_sequence(sent)
-    for si, sent in enumerate(net.corpus['sentence'])
-}
-treelet_indices = []
-for target_seq in TREELET_SENTENCES:
-    found = [si for si, ws in corpus_word_seqs.items() if ws == target_seq]
-    if found:
-        treelet_indices.append(found[0])
-        print(f"  Found '{target_seq}' as S{found[0]}")
-    else:
-        print(f"  WARNING: '{target_seq}' not found in corpus!")
+# print("\n=== CORPUS SENTENCE ORDER ===")
+# for si, sent in enumerate(net.corpus['sentence']):
+#     print(f"S{si}: {get_word_sequence(sent)}")
+# print("=" * 70)
 
 
-def plot_sentence_treelets(net, sent, sent_idx):
-    """Run network on a sentence and plot treelet activations at key roles."""
-    word_seq = get_word_sequence(sent)
-    words = [bname.split('/')[0] for bname in sent]
-    print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
+# TREELET_SENTENCES = [
+#     'DT NN WP VBD VBN DT NN VBD JJ NN',
+#     'DT NN VBN DT NN VBD JJ NN',
+# ]
+# TREELET_ROLES = ['(1,3)', '(8,2)'] # (1,3) checks if WHNP is present for treelet1, (8,2) checks if SBAR is present for treelet1
+# NUM_TREELETS = 10
 
-    np.random.seed(1024 + sent_idx)
-    net.reset(mu=net.ep, sd=0.01)
-    net.initialize_traces(trace_list='all')
-
-    for wi, word in enumerate(words):
-        net.run_word(word, wi + 1, log_trace=True)
-    net.run_wrapup(log_trace=True)
-
-    n_panels = len(TREELET_ROLES)
-    fig, axes = plt.subplots(n_panels, 1, figsize=(12, 5 * n_panels))
-    if n_panels == 1:
-        axes = [axes]
-
-    for ax, rname in zip(axes, TREELET_ROLES):
-        plt.sca(ax)
-        try:
-            gsc.plot_treelet_act_trace(
-                net, rname=rname, num_treelets=NUM_TREELETS,
-                tmin=0, tmax=net.t,
-                downsampling=max(1, int(len(net.traces['t']) / 200)),
-                suppress_pos=True, add_prob=False,
-                legend_pos='upper right')
-        except Exception as e:
-            ax.text(0.5, 0.5, f'Role {rname}: {e}',
-                    transform=ax.transAxes, ha='center')
-        ax.set_title(f'S{sent_idx}: {word_seq} — Role {rname}', fontsize=11)
-        ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    fname = (f'{SAVE_PREFIX}_S{sent_idx}_'
-             f'{word_seq.replace(" ", "_")}.png')
-    plt.savefig(fname, dpi=300, bbox_inches='tight')
-    return fname
+# corpus_word_seqs = {
+#     si: get_word_sequence(sent)
+#     for si, sent in enumerate(net.corpus['sentence'])
+# }
+# treelet_indices = []
+# for target_seq in TREELET_SENTENCES:
+#     found = [si for si, ws in corpus_word_seqs.items() if ws == target_seq]
+#     if found:
+#         treelet_indices.append(found[0])
+#         print(f"  Found '{target_seq}' as S{found[0]}")
+#     else:
+#         print(f"  WARNING: '{target_seq}' not found in corpus!")
 
 
-filenames = []
-for si in treelet_indices:
-    sent = net.corpus['sentence'][si]
-    fname = plot_sentence_treelets(net, sent, si)
-    filenames.append(fname)
+# def plot_sentence_treelets(net, sent, sent_idx):
+#     """Run network on a sentence and plot treelet activations at key roles."""
+#     word_seq = get_word_sequence(sent)
+#     words = [bname.split('/')[0] for bname in sent]
+#     print(f"\nGenerating plots for Sentence {sent_idx}: {word_seq}")
 
-print("\n" + "=" * 70)
-print("Done!")
-print(f"Model:   {SAVE_MODEL}")
-print(f"Parsing: {SAVE_PREFIX}_parsing.png")
-print("Treelet plots:")
-for fname in filenames:
-    print(f"  {fname}")
-print("=" * 70)
-print(f"Total time: {time.time() - t0:.1f}s")
+#     np.random.seed(1024 + sent_idx)
+#     net.reset(mu=net.ep, sd=0.01)
+#     net.initialize_traces(trace_list='all')
+
+#     for wi, word in enumerate(words):
+#         net.run_word(word, wi + 1, log_trace=True)
+#     net.run_wrapup(log_trace=True)
+
+#     n_panels = len(TREELET_ROLES)
+#     fig, axes = plt.subplots(n_panels, 1, figsize=(12, 5 * n_panels))
+#     if n_panels == 1:
+#         axes = [axes]
+
+#     for ax, rname in zip(axes, TREELET_ROLES):
+#         plt.sca(ax)
+#         try:
+#             gsc.plot_treelet_act_trace(
+#                 net, rname=rname, num_treelets=NUM_TREELETS,
+#                 tmin=0, tmax=net.t,
+#                 downsampling=max(1, int(len(net.traces['t']) / 200)),
+#                 suppress_pos=True, add_prob=False,
+#                 legend_pos='upper right')
+#         except Exception as e:
+#             ax.text(0.5, 0.5, f'Role {rname}: {e}',
+#                     transform=ax.transAxes, ha='center')
+#         ax.set_title(f'S{sent_idx}: {word_seq} — Role {rname}', fontsize=11)
+#         ax.grid(True, alpha=0.3)
+
+#     plt.tight_layout()
+#     fname = (f'{SAVE_PREFIX}_S{sent_idx}_'
+#              f'{word_seq.replace(" ", "_")}.png')
+#     plt.savefig(fname, dpi=300, bbox_inches='tight')
+#     return fname
+
+
+# filenames = []
+# for si in treelet_indices:
+#     sent = net.corpus['sentence'][si]
+#     fname = plot_sentence_treelets(net, sent, si)
+#     filenames.append(fname)
+
+# print("\n" + "=" * 70)
+# print("Done!")
+# print(f"Model:   {SAVE_MODEL}")
+# print(f"Parsing: {SAVE_PREFIX}_parsing.png")
+# print("Treelet plots:")
+# for fname in filenames:
+#     print(f"  {fname}")
+# print("=" * 70)
+# print(f"Total time: {time.time() - t0:.1f}s")
