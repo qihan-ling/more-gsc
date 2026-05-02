@@ -211,30 +211,45 @@ class PCFG():
     def _tokenize_cnf_optimized(self):
         if not self.opts['use_hnf']:
             t0 = time.time()
-            # Separate rules by type once
             unary_rules = [r for r in self.rules if r['d2'] is None]
             binary_rules = [r for r in self.rules if r['d2'] is not None]
 
             mothers = set(rule['m'] for rule in self.rules)
             sym_prob = {rule['d1']: rule['p'] for rule in unary_rules}
 
-            # Build lookup from unary rules only
             mother_to_children = {}
             for rule in unary_rules:
                 mother_to_children.setdefault(rule['m'], []).append(rule['d1'])
+
+            # Resolve multi-level unary chains (e.g. VP -> VP[1] -> VBD)
+            # so that daughters in binary rules point to true leaves.
+            _chain_cache = {}
+
+            def _get_chain_leaves(symbol):
+                if symbol in _chain_cache:
+                    return _chain_cache[symbol]
+                if symbol not in mother_to_children:
+                    _chain_cache[symbol] = [(symbol, 1.0)]
+                    return _chain_cache[symbol]
+                results = []
+                for child in mother_to_children[symbol]:
+                    p_edge = sym_prob.get(child, 1.0)
+                    for leaf, p_chain in _get_chain_leaves(child):
+                        results.append((leaf, p_edge * p_chain))
+                _chain_cache[symbol] = results
+                return results
 
             rules_seen = set()
             rules_new = []
 
             for rule in binary_rules:
-                d1_syms = mother_to_children.get(rule['d1'], [rule['d1']])
-                d2_syms = mother_to_children.get(rule['d2'], [rule['d2']])
+                d1_pairs = _get_chain_leaves(rule['d1'])
+                d2_pairs = _get_chain_leaves(rule['d2'])
 
-                for d1_sym in d1_syms:
-                    for d2_sym in d2_syms:
+                for d1_sym, d1_prob in d1_pairs:
+                    for d2_sym, d2_prob in d2_pairs:
                         p = (sym_prob.get(rule['m'], 1.0) *
-                             sym_prob.get(d1_sym, 1.0) *
-                             sym_prob.get(d2_sym, 1.0))
+                             d1_prob * d2_prob)
 
                         rule_key = (rule['m'], d1_sym, d2_sym, p)
                         if rule_key not in rules_seen:
@@ -1208,6 +1223,105 @@ class PCFG():
                 ignore_bracket=True, ignore_copy=True)
 
         return terminals, parse, p_root * p
+
+    def enumerate_all_sentences(self, min_sent_len=1, max_sent_len=20,
+                                use_type=True):
+        """Exhaustively enumerate all derivable sentences within length bounds.
+
+        Uses tuple-based tree specs (immutable, cacheable) and builds fresh
+        Node trees only for the final merged results.
+
+        Returns:
+            list of (terminals, parse_tree_Node, probability)
+        """
+        cache = {}
+
+        def expand_all(symbol, max_len):
+            key = (symbol, max_len)
+            if key in cache:
+                return cache[key]
+
+            if max_len <= 0:
+                cache[key] = []
+                return []
+
+            if self.is_terminal(symbol):
+                result = [([symbol], (symbol,), 1.0)]
+                cache[key] = result
+                return result
+
+            rules = self.get_rules(subset={'m': symbol})
+            if not rules:
+                cache[key] = []
+                return []
+
+            prob_arr = np.array([r['p'] for r in rules])
+            prob_arr /= prob_arr.sum()
+
+            results = []
+            for ri, rule in enumerate(rules):
+                d1sym = rule['d1']
+                d2sym = rule['d2']
+                rp = prob_arr[ri]
+
+                if d2sym is None:
+                    for d1_t, d1_spec, d1_p in expand_all(d1sym, max_len):
+                        results.append(
+                            (d1_t, (symbol, d1_spec), rp * d1_p))
+                else:
+                    d1_all = expand_all(d1sym, max_len - 1)
+                    for d1_t, d1_spec, d1_p in d1_all:
+                        remaining = max_len - len(d1_t)
+                        if remaining <= 0:
+                            continue
+                        for d2_t, d2_spec, d2_p in expand_all(
+                                d2sym, remaining):
+                            results.append(
+                                (d1_t + d2_t,
+                                 (symbol, d1_spec, d2_spec),
+                                 rp * d1_p * d2_p))
+
+            cache[key] = results
+            return results
+
+        roots = self.get_roots()
+        root_probs = np.array([self.aggregate_prob(r) for r in roots])
+        root_probs /= root_probs.sum()
+
+        all_derivations = []
+        for ri, root_sym in enumerate(roots):
+            for terms, spec, p in expand_all(root_sym, max_sent_len):
+                all_derivations.append((terms, spec, root_probs[ri] * p))
+
+        merged = {}
+        for terms, spec, p in all_derivations:
+            if len(terms) < min_sent_len:
+                continue
+            key = tuple(terms)
+            if key in merged:
+                merged[key] = (merged[key][0], merged[key][1],
+                               merged[key][2] + p)
+            else:
+                merged[key] = (terms, spec, p)
+
+        results = []
+        for terms, spec, p in merged.values():
+            tree = PCFG._build_tree_from_spec(spec)
+            if use_type:
+                terms = self.get_types(
+                    terms, ignore_pos_f=True,
+                    ignore_bracket=True, ignore_copy=True)
+            results.append((terms, tree, p))
+
+        return results
+
+    @staticmethod
+    def _build_tree_from_spec(spec):
+        """Build a Node tree from a tuple spec like ('S', ('NP', ...), ('VP', ...))."""
+        node = Node(spec[0])
+        for child_spec in spec[1:]:
+            node.add_child(PCFG._build_tree_from_spec(child_spec))
+        return node
 
 
 class BrickRole(object):
