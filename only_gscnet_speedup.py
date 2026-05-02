@@ -1669,7 +1669,7 @@ class GscNet():
         self.C_T = self.C.T
 
         # Convert to JAX if using GPU
-        if self.use_jax:  # QI's TODO: use_jax not defined yet
+        if self.use_jax:
             print("  Converting change-of-basis matrices to GPU...")
             # Use float32 for GPU efficiency (or float64 if precision critical)
             self.C = jnp.array(self.C, dtype=jnp.float32)
@@ -1733,6 +1733,7 @@ class GscNet():
             if r1 == 'ub' and r2 == 'ub':
                 # for role in roles.role_names:
                 for ri in range(len(self.hg.role_names)):
+                    role = roles.role_names[ri]  # FIX: define 'role' from index
                     # if not roles.is_bracketed(role):
                     if not self.hg.roles.role_is_bracketed[ri]:
                         bname1 = rule['f1'] + bsep + role
@@ -1755,7 +1756,7 @@ class GscNet():
                     for mr in focus_mother_roles:
                         if mr in roles.role_names:
                             bname2 = rule['f2'] + bsep + mr
-                            self.set_weight(b1name, b2name, rule['H'],
+                            self.set_weight(bname1, bname2, rule['H'],  # FIX: was 'b1name'
                                             cumulative=cumulative, c2n=False)
 
             else:
@@ -2551,6 +2552,64 @@ class GscNet():
                        'target': targets,  # targets_unique,
                        'count': counts,
                        'prob_sent': pvals}
+
+    def generate_corpus_exhaustive(self, min_sent_len=None, max_sent_len=None,
+                                   use_type=True):
+        """Generate corpus by exhaustively enumerating all derivable sentences.
+
+        Instead of sampling, this deterministically produces every sentence
+        the grammar can derive within the length bounds.  Probabilities are
+        exact (marginalised over parse trees for ambiguous sentences).
+        """
+        if max_sent_len is None:
+            max_sent_len = self.hg.opts['max_sent_len']
+        if min_sent_len is None:
+            min_sent_len = 1
+
+        all_sents = self.hg.g0.enumerate_all_sentences(
+            min_sent_len=min_sent_len, max_sent_len=max_sent_len,
+            use_type=use_type)
+
+        sentences = []
+        targets = []
+        pvals = []
+
+        for terms, parse_tree, p in all_sents:
+            if self.hg.opts['role_system'] == 'brick_role':
+                parse = self.hg.convert(parse_tree)
+            else:
+                parse = parse_tree
+
+            sent_input = [bname + self.hg.opts['bsep'] +
+                          '(1,{})'.format(pos + 1)
+                          for pos, bname in enumerate(terms)]
+
+            target = self.get_target_state(parse)
+
+            if sent_input in sentences:
+                idx = sentences.index(sent_input)
+                pvals[idx] += p
+            else:
+                sentences.append(sent_input)
+                targets.append(list(target))
+                pvals.append(p)
+
+        pvals = np.array(pvals)
+        pvals /= pvals.sum()
+
+        idx = np.argsort(pvals)[::-1]
+        sentences = [sentences[si] for si in idx]
+        pvals = pvals[idx]
+        targets = np.array([targets[si] for si in idx])
+        counts = np.maximum(np.round(pvals * 10000).astype(int), 1)
+
+        self.corpus = {'sentence': sentences,
+                       'target': targets,
+                       'count': counts,
+                       'prob_sent': pvals}
+
+        print(f"Exhaustive corpus: {len(sentences)} unique sentences "
+              f"(len {min_sent_len}..{max_sent_len})")
 
     def generate_sentence(self, min_sent_len=None, max_sent_len=None, use_type=True, add_null_input=False):
 
