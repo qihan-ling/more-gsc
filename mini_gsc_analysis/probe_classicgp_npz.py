@@ -22,7 +22,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from mini_gsc_analysis.gsc_inference_utils import (
-    TargetPair, pos_tokens, run_per_set_analysis,
+    TargetPair, pos_tokens, render_from_json, run_per_set_analysis,
 )
 
 
@@ -53,7 +53,20 @@ def main() -> None:
     parser.add_argument("--alt-comma-token", default=",",
                         help="filler used in place of the comma token")
     parser.add_argument("--no-plots", action="store_true")
+    parser.add_argument(
+        "--render-only", metavar="JSON_PATH", default=None,
+        help=("Skip simulation and re-render figures from an existing "
+              f"results JSON (typically results/{SET_NAME}_results.json)."))
+    parser.add_argument(
+        "--fig-dir", default=None,
+        help="Override directory for rendered figures.")
     args = parser.parse_args()
+
+    if args.render_only:
+        render_from_json(args.render_only, fig_dir=args.fig_dir,
+                         set_name=SET_NAME)
+        print(f"[{SET_NAME}] re-rendered from {args.render_only}")
+        return
 
     run_per_set_analysis(
         set_name=SET_NAME,
@@ -63,6 +76,7 @@ def main() -> None:
         control_source=args.control_source,
         control_seed=args.control_seed,
         run_seed=args.run_seed,
+        fig_dir=args.fig_dir,
         make_plots=not args.no_plots,
     )
 

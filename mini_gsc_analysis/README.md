@@ -34,6 +34,14 @@ mini_gsc_analysis/
 ## Per-sentence difficulty metrics (D)
 
 * `D_surp`: per-word surprisal, derived from end-of-word `actCmat[level=1, position=w]`.
+  Probability mass at the level-1 role is normalised over **terminal fillers
+  only** (e.g. `'DT:0'`, `'NN:0'`, `'NN:1'`, ...) and the user-supplied bare
+  POS token (e.g. `'NN'`) is matched against fillers via the type-strip rule
+  `filler.split(net.hg.opts['sep'], 1)[0] == token`. This is what
+  `set_input(..., use_type=True)` does internally; doing the same here is
+  required because `HarmonicGrammar` defaults to `use_pos_f=True`, so
+  `net.filler_names` contains entries like `'DT:0'` rather than bare `'DT'`.
+  See ``_filler_indices_for_token`` and ``_terminal_filler_indices``.
 * `D_H`: harmony deficit (`-H` per word, normalised by `num_bindings`).
 * `D_settle`: log-mean of `||grad H||` within each `run_word`.
 * `D_ent`: mean per-role entropy over the per-step `actCmat` distributions.
@@ -91,7 +99,52 @@ Each per-set script accepts:
 --control-seed N          RNG seed for control sampling (default 0)
 --run-seed N              RNG seed used for every sentence run (default 1024)
 --no-plots                skip per-set figure rendering
+--render-only JSON_PATH   skip simulation and re-render figures from an
+                          existing results JSON (no model load required)
+--fig-dir DIR             override directory for rendered figures
 ```
+
+### Re-rendering plots from existing JSON
+
+If a cluster run wrote `results/<set>_results.json` successfully but plotting
+failed (or you have updated the plotting code), re-render without paying the
+simulation cost:
+
+```sh
+python -m mini_gsc_analysis.probe_classicgp_nps \
+    --render-only mini_gsc_analysis/results/classicgp_nps_results.json
+```
+
+Programmatic equivalent:
+
+```python
+from mini_gsc_analysis.gsc_inference_utils import render_from_json
+render_from_json("mini_gsc_analysis/results/classicgp_nps_results.json")
+```
+
+Plot rendering is NaN/Inf-safe (subplot per metric; an all-NaN array
+renders as a "no finite data" annotation rather than crashing) and
+zero-range-safe (degenerate distributions render as a single-bar
+histogram). A failure in one metric's subplot does not abort the
+others.
+
+## NaN audit
+
+After every per-set run the driver computes a NaN/Inf audit across all
+records and prints any offending metrics, e.g.:
+
+```
+[classicgp_nps] NaN audit (offenders only):
+  D_surp_a            : control=100/100, target=1/1
+  D_surp_b            : control=100/100, target=1/1
+  J_logp_gap          : control=100/100, target=1/1
+[classicgp_nps]   fully broken (every record NaN/Inf): ['D_surp_a', 'D_surp_b', 'J_logp_gap']
+```
+
+The same data is persisted in `payload["nan_audit"]` so plotting bugs and
+metric bugs are distinguishable from cluster output alone, without having to
+load the JSON locally. A clean run prints
+`[<set>] NaN audit: clean (no NaN/Inf in any metric)`.
 
 ## Caching, reproducibility, sanity checks
 
@@ -124,6 +177,11 @@ Each per-set script accepts:
     "D": {"D_surp": {"per_target": [...], "null_size_by_spillover": {...}, ...}, ...}
   },
   "sanity_shared_prefix": {...},
+  "nan_audit": {
+    "D_total": {"D_surp_a": {"target": [1, 1], "control": [100, 100]}, ...},
+    "J":       {"J_logp_gap": {"target": [1, 1], "control": [100, 100]}, ...},
+    "broken_metrics": ["D_surp_a", "D_surp_b", "J_logp_gap"]
+  },
   "raw_target_records": [...],   // preserved for correlation analysis
   "raw_control_records": [...]
 }

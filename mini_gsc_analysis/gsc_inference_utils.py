@@ -31,6 +31,7 @@ import sys
 import json
 import pickle
 import hashlib
+import warnings
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Sequence
 
@@ -380,14 +381,82 @@ def D_settle_total(net, run: SentenceRun) -> float:
     return float(np.nanmean(D_settle_per_word(net, run)))
 
 
-def _per_role_distribution(actCmat: np.ndarray, eps: float = 1e-9) -> np.ndarray:
+def _per_role_distribution(
+    actCmat: np.ndarray,
+    eps: float = 1e-9,
+    restrict_indices: Optional[Sequence[int]] = None,
+) -> np.ndarray:
     """Square-and-normalise: p_r ∝ actCmat[:, r]**2.
 
     This matches the Hq1 quantisation constraint (sum_b actCmat[b,r]**2 ≈ 1).
+
+    When ``restrict_indices`` is supplied, rows not in that index list are
+    masked to zero before column-wise normalisation. This is used by
+    ``D_surp_per_word`` to compute a *terminal-only* filler distribution at
+    terminal roles, so that probability mass is not diluted by nonterminal
+    bindings such as ``'NP[1]:0'``.
     """
     sq = actCmat ** 2
+    if restrict_indices is not None:
+        mask = np.zeros(sq.shape[0], dtype=bool)
+        mask[list(restrict_indices)] = True
+        sq = np.where(mask[:, None], sq, 0.0)
     s = sq.sum(axis=0, keepdims=True)
     return sq / np.maximum(s, eps)
+
+
+def _filler_indices_for_token(net, tok: str) -> list[int]:
+    """Return all filler indices whose 'type' equals ``tok``.
+
+    The grammar stores fillers as ``'TOK:pos_f_label'`` (where the
+    separator is ``net.hg.opts['sep']``, default ``':'``). Callers that
+    have a bare POS token like ``'NN'`` therefore must match against
+    ``filler_name.split(sep, 1)[0]``. ``set_input`` does this internally
+    via its ``use_type=True`` path; we replicate the same mapping here.
+    """
+    sep = net.hg.opts.get("sep", ":")
+    return [i for i, fn in enumerate(net.filler_names)
+            if fn.split(sep, 1)[0] == tok]
+
+
+def _terminal_filler_indices(net) -> list[int]:
+    """Indices of all terminal fillers in ``net.filler_names``.
+
+    Used as the per-role denominator restriction for surprisal so that
+    probability mass at level-1 (terminal) roles is normalised over the
+    grammar's terminal vocabulary only, not over nonterminal fillers like
+    ``'NP[1]:0'``.
+    """
+    cache_key = "_terminal_filler_indices_cache"
+    cache = getattr(net, cache_key, None)
+    if cache is not None:
+        return cache
+    sep = net.hg.opts.get("sep", ":")
+    nonterminals: set[str] = set()
+    try:
+        nonterminals = set(net.hg.get_nonterminals())
+    except Exception:
+        pass
+    null = net.hg.opts.get("null", "_")
+    copy = net.hg.opts.get("copy", "*")
+    indices: list[int] = []
+    for i, fn in enumerate(net.filler_names):
+        base = fn.split(sep, 1)[0]
+        if base == null:
+            continue
+        if base.startswith(copy):
+            continue
+        if base in nonterminals:
+            continue
+        # Skip bracketed nonterminal markers like 'NP[1]', 'S[2]'.
+        if "[" in base and base.endswith("]"):
+            continue
+        indices.append(i)
+    try:
+        setattr(net, cache_key, indices)
+    except Exception:
+        pass
+    return indices
 
 
 def _entropy(p: np.ndarray, eps: float = 1e-12) -> float:
@@ -492,7 +561,7 @@ def D_surp_per_word(net, run: SentenceRun, eps: float = 1e-9) -> np.ndarray:
     """
     out = np.empty(run.n_words)
     role_names = list(net.role_names)
-    filler_names = list(net.filler_names)
+    terminal_idx = _terminal_filler_indices(net)
     for w in range(run.n_words):
         rname = f"(1,{w + 1})"
         try:
@@ -500,15 +569,15 @@ def D_surp_per_word(net, run: SentenceRun, eps: float = 1e-9) -> np.ndarray:
         except ValueError:
             out[w] = float("nan")
             continue
-        actC = run.per_word[w]["actC"]
-        actCmat = _vec2mat(net, actC)
-        p = _per_role_distribution(actCmat)
-        try:
-            f_idx = filler_names.index(run.per_word[w]["fname"])
-        except ValueError:
+        matches = _filler_indices_for_token(net, run.per_word[w]["fname"])
+        if not matches:
             out[w] = float("nan")
             continue
-        out[w] = float(-np.log(max(p[f_idx, r_idx], eps)))
+        actC = run.per_word[w]["actC"]
+        actCmat = _vec2mat(net, actC)
+        p = _per_role_distribution(actCmat, restrict_indices=terminal_idx)
+        prob_token = float(p[matches, r_idx].sum())
+        out[w] = float(-np.log(max(prob_token, eps)))
     return out
 
 
@@ -1031,6 +1100,101 @@ def read_json(path: str):
 # ---------------------------------------------------------------------------
 
 
+def compute_nan_audit(target_records: list[dict],
+                      control_records: list[dict]) -> dict:
+    """Count NaN/Inf occurrences per metric across target and control records.
+
+    Returns a dict of the form::
+
+        {
+          "D_total": {"D_surp_a": {"target": (n_nan, n_total),
+                                    "control": (n_nan, n_total)}, ...},
+          "J":       {"J_logp_gap": {"target": ..., "control": ...}, ...},
+          "broken_metrics": ["D_surp_a", "D_surp_b", "J_logp_gap"],
+        }
+
+    A metric is "broken" iff every record (target+control) has NaN/Inf for
+    it. The summary is both printed and persisted in the JSON payload so
+    future cluster runs surface root-cause failures immediately rather
+    than only at plot time.
+    """
+    def _count(records, key_path):
+        bad = 0
+        for r in records:
+            cur = r
+            for k in key_path:
+                cur = cur.get(k) if isinstance(cur, dict) else None
+                if cur is None:
+                    break
+            if cur is None:
+                bad += 1
+                continue
+            try:
+                if not np.isfinite(float(cur)):
+                    bad += 1
+            except (TypeError, ValueError):
+                bad += 1
+        return bad
+
+    out: dict = {"D_total": {}, "J": {}}
+
+    sample_target = target_records[0] if target_records else {}
+    sample_control = control_records[0] if control_records else {}
+
+    d_keys = sorted(set(sample_target.get("D_total", {}).keys())
+                    | set(sample_control.get("D_total", {}).keys()))
+    j_keys = sorted(set(sample_target.get("J", {}).keys())
+                    | set(sample_control.get("J", {}).keys()))
+
+    broken: list[str] = []
+    for k in d_keys:
+        n_t = _count(target_records, ["D_total", k])
+        n_c = _count(control_records, ["D_total", k])
+        out["D_total"][k] = {
+            "target": [n_t, len(target_records)],
+            "control": [n_c, len(control_records)],
+        }
+        if (n_t == len(target_records) and len(target_records) > 0
+                and n_c == len(control_records)
+                and len(control_records) > 0):
+            broken.append(k)
+    for k in j_keys:
+        n_t = _count(target_records, ["J", k])
+        n_c = _count(control_records, ["J", k])
+        out["J"][k] = {
+            "target": [n_t, len(target_records)],
+            "control": [n_c, len(control_records)],
+        }
+        if (n_t == len(target_records) and len(target_records) > 0
+                and n_c == len(control_records)
+                and len(control_records) > 0):
+            broken.append(k)
+    out["broken_metrics"] = broken
+    return out
+
+
+def _print_nan_audit(set_name: str, audit: dict) -> None:
+    """Pretty-print only the offending entries (>0 NaN) of the audit."""
+    bad_lines: list[str] = []
+    for cat in ("D_total", "J"):
+        for k, info in audit.get(cat, {}).items():
+            n_t, t_total = info["target"]
+            n_c, c_total = info["control"]
+            if n_t == 0 and n_c == 0:
+                continue
+            bad_lines.append(
+                f"  {k:20s}: control={n_c}/{c_total}, target={n_t}/{t_total}")
+    if not bad_lines:
+        print(f"[{set_name}] NaN audit: clean (no NaN/Inf in any metric)")
+        return
+    print(f"[{set_name}] NaN audit (offenders only):")
+    for ln in bad_lines:
+        print(ln)
+    if audit.get("broken_metrics"):
+        print(f"[{set_name}]   fully broken (every record NaN/Inf): "
+              f"{audit['broken_metrics']}")
+
+
 def run_per_set_analysis(
     set_name: str,
     model_path: str,
@@ -1097,6 +1261,8 @@ def run_per_set_analysis(
                                   target_pairs)
 
     sanity = shared_prefix_check(target_records)
+    nan_audit = compute_nan_audit(target_records, control_records)
+    _print_nan_audit(set_name, nan_audit)
 
     payload = {
         "set_name": set_name,
@@ -1116,6 +1282,7 @@ def run_per_set_analysis(
         "design_a": design_a,
         "design_b": design_b,
         "sanity_shared_prefix": sanity,
+        "nan_audit": nan_audit,
         "raw_target_records": target_records,
         "raw_control_records": control_records,
     }
@@ -1133,52 +1300,109 @@ def run_per_set_analysis(
     return payload
 
 
+def _safe_axis_msg(ax, msg: str) -> None:
+    """Render a centered annotation in lieu of plot data."""
+    ax.text(0.5, 0.5, msg, ha="center", va="center",
+            transform=ax.transAxes, fontsize=9, color="#666")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+def _safe_hist(ax, raw: np.ndarray, color: str, label_prefix: str) -> bool:
+    """Plot a NaN/Inf/zero-range-safe histogram on ``ax``.
+
+    Returns True iff something was plotted; otherwise the axis carries a
+    "no finite data" annotation and the caller can skip the legend.
+    """
+    arr = np.asarray(raw, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    n_total = arr.size
+    n_nan = int(np.sum(~np.isfinite(arr)))
+    if finite.size == 0:
+        _safe_axis_msg(ax, f"no finite data\n(n={n_total}, NaN/Inf={n_nan})")
+        return False
+    label = f"{label_prefix} (n={finite.size}"
+    if n_nan:
+        label += f", NaN/Inf={n_nan} dropped"
+    label += ")"
+    if float(np.ptp(finite)) == 0.0:
+        v = float(finite[0])
+        ax.hist(finite, bins=[v - 0.5, v + 0.5], color=color, alpha=0.7,
+                label=label)
+    else:
+        ax.hist(finite, bins=20, color=color, alpha=0.7, label=label)
+    return True
+
+
+def _safe_axvline(ax, stats: dict) -> None:
+    """Add a target axvline only if the target is finite."""
+    t = stats.get("target")
+    if t is None or not np.isfinite(t):
+        return
+    z = stats.get("z", float("nan"))
+    z_txt = f"{z:.2f}" if np.isfinite(z) else "n/a"
+    ax.axvline(float(t), color="red", linestyle="--",
+               label=f"{stats.get('pair_name', '?')} z={z_txt}")
+
+
 def _render_per_set_figures(set_name: str, payload: dict, fig_dir: str,
                             target_pairs: list[TargetPair]) -> None:
-    """Render the per-set Design A histograms and Design B per-word plots."""
+    """Render the per-set Design A histograms and Design B per-word plots.
+
+    All subplots are isolated by try/except so a single bad metric cannot
+    abort the rest of the figure. Histograms tolerate all-NaN arrays
+    (rendered as "no finite data") and zero-range distributions (rendered
+    as a single bar). Axvlines and envelope curves skip non-finite entries.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     os.makedirs(fig_dir, exist_ok=True)
 
-    # --- Design A histograms -----------------------------------------------
+    # --- Design A histograms (D metrics) ----------------------------------
     da = payload["design_a"]["D"]
     metric_names = list(D_METRICS.keys())
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     axes = axes.flatten()
     for ax, name in zip(axes, metric_names):
-        controls = np.asarray(da[name]["control_gaps"], dtype=float)
-        ax.hist(controls, bins=20, color="#888", alpha=0.7,
-                label=f"control (n={controls.size})")
-        for stats in da[name]["per_target"]:
-            ax.axvline(stats["target"], color="red", linestyle="--",
-                       label=f"{stats['pair_name']} z={stats['z']:.2f}")
-        ax.set_title(f"Design A: {name}")
-        ax.set_xlabel("|D_total(A) - D_total(B)|")
-        ax.set_ylabel("count")
-        ax.legend(fontsize=7)
+        try:
+            controls = np.asarray(da[name]["control_gaps"], dtype=float)
+            plotted = _safe_hist(ax, controls, "#888", "control")
+            for stats in da[name]["per_target"]:
+                _safe_axvline(ax, stats)
+            ax.set_title(f"Design A: {name}")
+            ax.set_xlabel("|D_total(A) - D_total(B)|")
+            ax.set_ylabel("count")
+            if plotted or any(np.isfinite(s.get("target", np.nan))
+                              for s in da[name]["per_target"]):
+                ax.legend(fontsize=7)
+        except Exception as exc:
+            _safe_axis_msg(ax, f"{name}: {exc}")
     fig.suptitle(f"{set_name} | Design A: whole-sequence gaps")
     fig.tight_layout()
     fig.savefig(os.path.join(fig_dir, f"{set_name}_design_a.png"), dpi=150)
     plt.close(fig)
 
-    # --- Design A J-metrics ------------------------------------------------
+    # --- Design A histograms (J metrics) ----------------------------------
     dj = payload["design_a"]["J"]
     j_names = list(J_METRICS.keys())
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     axes = axes.flatten()
     for ax, name in zip(axes, j_names):
-        controls = np.asarray(dj[name]["control_values"], dtype=float)
-        ax.hist(controls, bins=20, color="#558", alpha=0.7,
-                label=f"control (n={controls.size})")
-        for stats in dj[name]["per_target"]:
-            ax.axvline(stats["target"], color="red", linestyle="--",
-                       label=f"{stats['pair_name']} z={stats['z']:.2f}")
-        ax.set_title(f"Design A (J): {name}")
-        ax.set_xlabel(name)
-        ax.set_ylabel("count")
-        ax.legend(fontsize=7)
+        try:
+            controls = np.asarray(dj[name]["control_values"], dtype=float)
+            plotted = _safe_hist(ax, controls, "#558", "control")
+            for stats in dj[name]["per_target"]:
+                _safe_axvline(ax, stats)
+            ax.set_title(f"Design A (J): {name}")
+            ax.set_xlabel(name)
+            ax.set_ylabel("count")
+            if plotted or any(np.isfinite(s.get("target", np.nan))
+                              for s in dj[name]["per_target"]):
+                ax.legend(fontsize=7)
+        except Exception as exc:
+            _safe_axis_msg(ax, f"{name}: {exc}")
     fig.suptitle(f"{set_name} | joint divergence (J) per pair")
     fig.tight_layout()
     fig.savefig(os.path.join(fig_dir, f"{set_name}_design_a_J.png"), dpi=150)
@@ -1190,44 +1414,62 @@ def _render_per_set_figures(set_name: str, payload: dict, fig_dir: str,
     fig, axes = plt.subplots(2, 3, figsize=(15, 8))
     axes = axes.flatten()
     for ax, name in zip(axes, metric_names):
-        # Build envelope from per-pair per-word |D_a - D_b| (length-aligned to
-        # min of the two sentences). For unequal-length pairs we just plot the
-        # mean over the shorter one.
-        ctrl_curves = []
-        for r in control_records:
-            pa = np.asarray(r["D_per_word_a"][name], dtype=float)
-            pb = np.asarray(r["D_per_word_b"][name], dtype=float)
-            n = min(pa.size, pb.size)
-            if n == 0:
-                continue
-            ctrl_curves.append(np.abs(pa[:n] - pb[:n]))
-        max_len = max((len(c) for c in ctrl_curves), default=0)
-        if max_len > 0:
-            padded = np.full((len(ctrl_curves), max_len), np.nan)
-            for i, c in enumerate(ctrl_curves):
-                padded[i, :len(c)] = c
-            mean_curve = np.nanmean(padded, axis=0)
-            std_curve = np.nanstd(padded, axis=0)
-            xs = np.arange(1, max_len + 1)
-            ax.plot(xs, mean_curve, color="#888", label="control mean")
-            ax.fill_between(xs, mean_curve - std_curve, mean_curve + std_curve,
-                            color="#888", alpha=0.3, label="+/-1 SD")
-        for i, sp in enumerate(target_pairs):
-            r = target_records[i]
-            pa = np.asarray(r["D_per_word_a"][name], dtype=float)
-            pb = np.asarray(r["D_per_word_b"][name], dtype=float)
-            n = min(pa.size, pb.size)
-            if n == 0:
-                continue
-            xs = np.arange(1, n + 1)
-            ax.plot(xs, np.abs(pa[:n] - pb[:n]), label=sp.name)
-            window_a = (sp.d_a, sp.d_a + sp.spillover)
-            ax.axvspan(window_a[0] - 0.4, window_a[1] + 0.4, color="red",
-                       alpha=0.10)
-        ax.set_title(f"Design B: per-word |D_a - D_b| | {name}")
-        ax.set_xlabel("word position")
-        ax.set_ylabel(name)
-        ax.legend(fontsize=7)
+        try:
+            envelope_drew = False
+            target_drew_anything = False
+            ctrl_curves = []
+            for r in control_records:
+                pa = np.asarray(r["D_per_word_a"][name], dtype=float)
+                pb = np.asarray(r["D_per_word_b"][name], dtype=float)
+                n = min(pa.size, pb.size)
+                if n == 0:
+                    continue
+                ctrl_curves.append(np.abs(pa[:n] - pb[:n]))
+            max_len = max((len(c) for c in ctrl_curves), default=0)
+            if max_len > 0:
+                padded = np.full((len(ctrl_curves), max_len), np.nan)
+                for i, c in enumerate(ctrl_curves):
+                    padded[i, :len(c)] = c
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    mean_curve = np.nanmean(padded, axis=0)
+                    std_curve = np.nanstd(padded, axis=0)
+                xs = np.arange(1, max_len + 1)
+                finite_mask = np.isfinite(mean_curve) & np.isfinite(std_curve)
+                if finite_mask.any():
+                    xs_f = xs[finite_mask]
+                    m_f = mean_curve[finite_mask]
+                    s_f = std_curve[finite_mask]
+                    ax.plot(xs_f, m_f, color="#888", label="control mean")
+                    ax.fill_between(xs_f, m_f - s_f, m_f + s_f,
+                                    color="#888", alpha=0.3, label="+/-1 SD")
+                    envelope_drew = True
+            for i, sp in enumerate(target_pairs):
+                r = target_records[i]
+                pa = np.asarray(r["D_per_word_a"][name], dtype=float)
+                pb = np.asarray(r["D_per_word_b"][name], dtype=float)
+                n = min(pa.size, pb.size)
+                if n == 0:
+                    continue
+                gap = np.abs(pa[:n] - pb[:n])
+                xs = np.arange(1, n + 1)
+                fmask = np.isfinite(gap)
+                if fmask.any():
+                    ax.plot(xs[fmask], gap[fmask], label=sp.name)
+                    target_drew_anything = True
+                if envelope_drew or target_drew_anything:
+                    window_a = (sp.d_a, sp.d_a + sp.spillover)
+                    ax.axvspan(window_a[0] - 0.4, window_a[1] + 0.4,
+                               color="red", alpha=0.10)
+            if not (envelope_drew or target_drew_anything):
+                _safe_axis_msg(ax, f"{name}: no finite per-word data")
+            else:
+                ax.set_title(f"Design B: per-word |D_a - D_b| | {name}")
+                ax.set_xlabel("word position")
+                ax.set_ylabel(name)
+                ax.legend(fontsize=7)
+        except Exception as exc:
+            _safe_axis_msg(ax, f"{name}: {exc}")
     fig.suptitle(f"{set_name} | Design B: per-word envelope (red shading = "
                  "target window for sentence A)")
     fig.tight_layout()
@@ -1255,3 +1497,55 @@ def _render_per_set_figures(set_name: str, payload: dict, fig_dir: str,
         fig.tight_layout()
         fig.savefig(os.path.join(fig_dir, f"{set_name}_sanity.png"), dpi=150)
         plt.close(fig)
+
+
+def render_from_payload(
+    payload: dict,
+    fig_dir: Optional[str] = None,
+    target_pairs: Optional[list[TargetPair]] = None,
+    set_name: Optional[str] = None,
+) -> None:
+    """Re-render figures from an existing per-set JSON payload.
+
+    No model load, no simulation. Useful when an analysis ran successfully
+    on the cluster but plotting failed locally, or when plotting code has
+    changed and you want updated figures from cached results.
+
+    Args:
+        payload: a dict matching the schema written by
+            :func:`run_per_set_analysis` (or loaded via :func:`read_json`).
+        fig_dir: where to write the figures. Defaults to
+            ``<package>/figs/<set_name>``.
+        target_pairs: list of TargetPair specs. If omitted, reconstructed
+            from ``payload['target_pairs']``.
+        set_name: override for ``payload['set_name']``.
+    """
+    sn = set_name or payload.get("set_name", "unknown_set")
+    if fig_dir is None:
+        fig_dir = os.path.join(os.path.dirname(__file__), "figs", sn)
+    os.makedirs(fig_dir, exist_ok=True)
+
+    if target_pairs is None:
+        tp_specs = payload.get("target_pairs", [])
+        target_pairs = [
+            TargetPair(
+                name=tp["name"],
+                sentence_a=tp["sentence_a"].split(),
+                sentence_b=tp["sentence_b"].split(),
+                d_a=int(tp["d_a"]),
+                d_b=int(tp["d_b"]),
+                spillover=int(tp.get("spillover", 2)),
+            )
+            for tp in tp_specs
+        ]
+    _render_per_set_figures(sn, payload, fig_dir, target_pairs)
+
+
+def render_from_json(
+    json_path: str,
+    fig_dir: Optional[str] = None,
+    set_name: Optional[str] = None,
+) -> None:
+    """Convenience wrapper: load JSON at ``json_path`` and re-render figures."""
+    payload = read_json(json_path)
+    render_from_payload(payload, fig_dir=fig_dir, set_name=set_name)
