@@ -23,7 +23,7 @@ from mini_gsc_analysis.gsc_inference_utils import (
 
 
 SET_NAME = "classicgp_mvpr"
-DEFAULT_MODEL_PATH = os.path.join("SAP_analysis", "classicgp_mvpr_model.pkl")
+DEFAULT_MODEL_PATH = os.path.join("../SAP_analysis", "classicgp_mvpr_model.pkl")
 
 
 def make_target_pairs() -> list[TargetPair]:

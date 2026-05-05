@@ -27,7 +27,7 @@ from mini_gsc_analysis.gsc_inference_utils import (
 
 
 SET_NAME = "classicgp_npz"
-DEFAULT_MODEL_PATH = os.path.join("SAP_analysis", "classicgp_npz_model.pkl")
+DEFAULT_MODEL_PATH = os.path.join("../SAP_analysis", "classicgp_npz_model.pkl")
 
 
 def make_target_pairs(comma_token: str = ",") -> list[TargetPair]:

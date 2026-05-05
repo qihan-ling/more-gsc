@@ -24,7 +24,7 @@ from mini_gsc_analysis.gsc_inference_utils import (
 
 SET_NAME = "relative_clause"
 DEFAULT_MODEL_PATH = os.path.join(
-    "SAP_analysis", "relative_clause_model.pkl")
+    "../SAP_analysis", "relative_clause_model.pkl")
 
 
 def make_target_pairs() -> list[TargetPair]:

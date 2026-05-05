@@ -26,7 +26,7 @@ from mini_gsc_analysis.gsc_inference_utils import (
 
 SET_NAME = "high_low_attachment"
 DEFAULT_MODEL_PATH = os.path.join(
-    "SAP_analysis", "high_low_attachment_model.pkl")
+    "../SAP_analysis", "high_low_attachment_model.pkl")
 
 
 def make_target_pairs() -> list[TargetPair]:
